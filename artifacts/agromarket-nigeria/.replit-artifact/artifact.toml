@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AgroMarket Nigeria"
+description = "A mobile-first marketplace connecting Nigerian farmers and suppliers with consumers and business buyers. Browse verified farms, compare wholesale prices, manage inventory and orders, and prepare for secure local payments."
+version = "1.0.0"
+id = "artifacts/agromarket-nigeria"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20938
+
+[services.development]
+run = "pnpm --filter @workspace/agromarket-nigeria run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/agromarket-nigeria", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/agromarket-nigeria/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20938"
+BASE_PATH = "/"
