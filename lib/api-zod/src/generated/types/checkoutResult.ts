@@ -5,10 +5,14 @@
  * AgroMarket Nigeria marketplace API
  * OpenAPI spec version: 0.1.0
  */
+import type { CheckoutResultStatus } from './checkoutResultStatus';
 import type { Order } from './order';
 
 export interface CheckoutResult {
   orderGroupNumber: string;
   grandTotal: number;
+  status: CheckoutResultStatus;
+  /** @nullable */
+  authorizationUrl: string | null;
   orders: Order[];
 }

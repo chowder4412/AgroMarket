@@ -215,9 +215,21 @@ export interface Order {
   items: OrderItem[];
 }
 
+export type CheckoutResultStatus = typeof CheckoutResultStatus[keyof typeof CheckoutResultStatus];
+
+
+export const CheckoutResultStatus = {
+  pending: 'pending',
+  paid: 'paid',
+  failed: 'failed',
+} as const;
+
 export interface CheckoutResult {
   orderGroupNumber: string;
   grandTotal: number;
+  status: CheckoutResultStatus;
+  /** @nullable */
+  authorizationUrl: string | null;
   orders: Order[];
 }
 
@@ -226,13 +238,43 @@ export type CheckoutInputPaymentMode = typeof CheckoutInputPaymentMode[keyof typ
 
 export const CheckoutInputPaymentMode = {
   sandbox: 'sandbox',
-  provider_pending: 'provider_pending',
+  paystack: 'paystack',
 } as const;
 
 export interface CheckoutInput {
   /** @minLength 8 */
   deliveryAddress: string;
   paymentMode: CheckoutInputPaymentMode;
+}
+
+export interface PaymentMethods {
+  sandboxAvailable: boolean;
+  paystackAvailable: boolean;
+}
+
+export interface PaystackVerificationInput {
+  /**
+     * @minLength 5
+     * @maxLength 160
+     */
+  reference: string;
+}
+
+export type PaymentVerificationStatus = typeof PaymentVerificationStatus[keyof typeof PaymentVerificationStatus];
+
+
+export const PaymentVerificationStatus = {
+  pending: 'pending',
+  paid: 'paid',
+  failed: 'failed',
+} as const;
+
+export interface PaymentVerification {
+  reference: string;
+  status: PaymentVerificationStatus;
+  orderGroupNumber: string;
+  grandTotal: number;
+  orders: Order[];
 }
 
 export interface SellerDashboard {

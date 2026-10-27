@@ -11,5 +11,5 @@ export type CheckoutInputPaymentMode = typeof CheckoutInputPaymentMode[keyof typ
 
 export const CheckoutInputPaymentMode = {
   sandbox: 'sandbox',
-  provider_pending: 'provider_pending',
+  paystack: 'paystack',
 } as const;

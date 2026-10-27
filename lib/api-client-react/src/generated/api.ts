@@ -38,6 +38,9 @@ import type {
   ListProductsParams,
   Order,
   OrderStatusUpdate,
+  PaymentMethods,
+  PaymentVerification,
+  PaystackVerificationInput,
   Product,
   ProductInput,
   ProductUpdate,
@@ -1214,7 +1217,7 @@ export const getCheckoutUrl = () => {
 }
 
 /**
- * @summary Validate stock and create a pending sandbox checkout order
+ * @summary Validate stock and start sandbox or Paystack checkout
  */
 export const checkout = async (checkoutInput: CheckoutInput, options?: Parameters<typeof customFetch>[1]): Promise<CheckoutResult> => {
 
@@ -1280,7 +1283,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CheckoutMutationVariables = {data: BodyType<CheckoutInput>}
 
     /**
- * @summary Validate stock and create a pending sandbox checkout order
+ * @summary Validate stock and start sandbox or Paystack checkout
  */
 export const useCheckout = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkout>>, TError,CheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -1291,6 +1294,270 @@ export const useCheckout = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getCheckoutMutationOptions(options), queryClient);
+    }
+
+export const getGetPaymentMethodsUrl = () => {
+
+
+
+
+  return `/api/payments/methods`
+}
+
+/**
+ * @summary List checkout methods available in this environment
+ */
+export const getPaymentMethods = async ( options?: Parameters<typeof customFetch>[1]): Promise<PaymentMethods> => {
+
+  return customFetch<PaymentMethods>(getGetPaymentMethodsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPaymentMethodsQueryKey = () => {
+    return [
+    `/api/payments/methods`
+    ] as const;
+    }
+
+
+export const getGetPaymentMethodsQueryOptions = <TData = Awaited<ReturnType<typeof getPaymentMethods>>, TError = ErrorType<unknown>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPaymentMethodsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPaymentMethods>>> = ({ signal }) => getPaymentMethods({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetPaymentMethodsQueryResult = NonNullable<Awaited<ReturnType<typeof getPaymentMethods>>>
+export type GetPaymentMethodsQueryError = ErrorType<unknown>
+
+
+export function useGetPaymentMethods<TData = Awaited<ReturnType<typeof getPaymentMethods>>, TError = ErrorType<unknown>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPaymentMethods>>,
+          TError,
+          Awaited<ReturnType<typeof getPaymentMethods>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPaymentMethods<TData = Awaited<ReturnType<typeof getPaymentMethods>>, TError = ErrorType<unknown>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPaymentMethods>>,
+          TError,
+          Awaited<ReturnType<typeof getPaymentMethods>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPaymentMethods<TData = Awaited<ReturnType<typeof getPaymentMethods>>, TError = ErrorType<unknown>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List checkout methods available in this environment
+ */
+
+export function useGetPaymentMethods<TData = Awaited<ReturnType<typeof getPaymentMethods>>, TError = ErrorType<unknown>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaymentMethods>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetPaymentMethodsQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getVerifyPaystackPaymentUrl = () => {
+
+
+
+
+  return `/api/payments/paystack/verify`
+}
+
+/**
+ * @summary Verify a Paystack payment for the signed-in buyer
+ */
+export const verifyPaystackPayment = async (paystackVerificationInput: PaystackVerificationInput, options?: Parameters<typeof customFetch>[1]): Promise<PaymentVerification> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<PaymentVerification>(getVerifyPaystackPaymentUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(paystackVerificationInput)
+  }
+);}
+
+
+
+
+
+export const getVerifyPaystackPaymentMutationKey = () => ['verifyPaystackPayment'] as const;
+
+export const getVerifyPaystackPaymentMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyPaystackPayment>>, TError,VerifyPaystackPaymentMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof verifyPaystackPayment>>, TError,VerifyPaystackPaymentMutationVariables, TContext> => {
+
+const mutationKey = getVerifyPaystackPaymentMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof verifyPaystackPayment>>, VerifyPaystackPaymentMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  verifyPaystackPayment(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type VerifyPaystackPaymentMutationResult = NonNullable<Awaited<ReturnType<typeof verifyPaystackPayment>>>
+    export type VerifyPaystackPaymentMutationBody = BodyType<PaystackVerificationInput>
+    export type VerifyPaystackPaymentMutationError = ErrorType<void>
+    export type VerifyPaystackPaymentMutationVariables = {data: BodyType<PaystackVerificationInput>}
+
+    /**
+ * @summary Verify a Paystack payment for the signed-in buyer
+ */
+export const useVerifyPaystackPayment = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyPaystackPayment>>, TError,VerifyPaystackPaymentMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof verifyPaystackPayment>>,
+        TError,
+        VerifyPaystackPaymentMutationVariables,
+        TContext
+      > => {
+      return useMutation(getVerifyPaystackPaymentMutationOptions(options), queryClient);
+    }
+
+export const getReceivePaystackWebhookUrl = () => {
+
+
+
+
+  return `/api/payments/paystack/webhook`
+}
+
+/**
+ * This endpoint verifies x-paystack-signature against the raw request body before processing.
+ * @summary Receive signed Paystack transaction events
+ */
+export const receivePaystackWebhook = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getReceivePaystackWebhookUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReceivePaystackWebhookMutationKey = () => ['receivePaystackWebhook'] as const;
+
+export const getReceivePaystackWebhookMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackWebhook>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receivePaystackWebhook>>, TError,void, TContext> => {
+
+const mutationKey = getReceivePaystackWebhookMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receivePaystackWebhook>>, void> = () => {
+
+
+          return  receivePaystackWebhook(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceivePaystackWebhookMutationResult = NonNullable<Awaited<ReturnType<typeof receivePaystackWebhook>>>
+
+    export type ReceivePaystackWebhookMutationError = ErrorType<void>
+
+
+    /**
+ * @summary Receive signed Paystack transaction events
+ */
+export const useReceivePaystackWebhook = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackWebhook>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof receivePaystackWebhook>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReceivePaystackWebhookMutationOptions(options), queryClient);
     }
 
 export const getListOrdersUrl = () => {

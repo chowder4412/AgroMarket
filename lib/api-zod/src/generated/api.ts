@@ -334,7 +334,7 @@ export const RemoveCartItemResponse = zod.object({
 
 
 /**
- * @summary Validate stock and create a pending sandbox checkout order
+ * @summary Validate stock and start sandbox or Paystack checkout
  */
 export const checkoutBodyDeliveryAddressMin = 8;
 
@@ -342,10 +342,60 @@ export const checkoutBodyDeliveryAddressMin = 8;
 
 export const CheckoutBody = zod.object({
   "deliveryAddress": zod.string().min(checkoutBodyDeliveryAddressMin),
-  "paymentMode": zod.enum(['sandbox', 'provider_pending'])
+  "paymentMode": zod.enum(['sandbox', 'paystack'])
 })
 
 export const CheckoutResponse = zod.object({
+  "orderGroupNumber": zod.string(),
+  "grandTotal": zod.number(),
+  "status": zod.enum(['pending', 'paid', 'failed']),
+  "authorizationUrl": zod.string().url().nullable(),
+  "orders": zod.array(zod.object({
+  "id": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['pending_payment', 'paid', 'processing', 'in_transit', 'delivered', 'cancelled']),
+  "paymentStatus": zod.enum(['pending', 'paid', 'failed']),
+  "paymentMode": zod.enum(['sandbox', 'provider_pending']),
+  "total": zod.number(),
+  "deliveryAddress": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "productId": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
+  "unitPrice": zod.number(),
+  "quantity": zod.number().int(),
+  "sellerName": zod.string()
+}))
+}))
+})
+
+
+/**
+ * @summary List checkout methods available in this environment
+ */
+export const GetPaymentMethodsResponse = zod.object({
+  "sandboxAvailable": zod.boolean(),
+  "paystackAvailable": zod.boolean()
+})
+
+
+/**
+ * @summary Verify a Paystack payment for the signed-in buyer
+ */
+export const verifyPaystackPaymentBodyReferenceMin = 5;
+export const verifyPaystackPaymentBodyReferenceMax = 160;
+
+
+
+export const VerifyPaystackPaymentBody = zod.object({
+  "reference": zod.string().min(verifyPaystackPaymentBodyReferenceMin).max(verifyPaystackPaymentBodyReferenceMax)
+})
+
+export const VerifyPaystackPaymentResponse = zod.object({
+  "reference": zod.string(),
+  "status": zod.enum(['pending', 'paid', 'failed']),
   "orderGroupNumber": zod.string(),
   "grandTotal": zod.number(),
   "orders": zod.array(zod.object({
@@ -368,6 +418,13 @@ export const CheckoutResponse = zod.object({
 }))
 }))
 })
+
+
+/**
+ * This endpoint verifies x-paystack-signature against the raw request body before processing.
+ * @summary Receive signed Paystack transaction events
+ */
+export const ReceivePaystackWebhookResponse = zod.unknown()
 
 
 /**

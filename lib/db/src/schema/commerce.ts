@@ -1,6 +1,7 @@
 import { createInsertSchema } from "drizzle-zod";
 import {
   integer,
+  index,
   pgEnum,
   pgTable,
   serial,
@@ -64,24 +65,29 @@ export const cartItemsTable = pgTable(
   (table) => [unique().on(table.cartId, table.productId)],
 );
 
-export const ordersTable = pgTable("orders", {
-  id: serial("id").primaryKey(),
-  orderNumber: varchar("order_number", { length: 40 }).notNull().unique(),
-  sellerId: integer("seller_id")
-    .notNull()
-    .references(() => sellerProfilesTable.id, { onDelete: "restrict" }),
-  buyerId: integer("buyer_id")
-    .notNull()
-    .references(() => usersTable.id, { onDelete: "cascade" }),
-  status: orderStatusEnum("status").notNull().default("pending_payment"),
-  paymentStatus: paymentStatusEnum("payment_status").notNull().default("pending"),
-  paymentMode: paymentModeEnum("payment_mode").notNull().default("sandbox"),
-  totalNgn: integer("total_ngn").notNull(),
-  deliveryAddress: text("delivery_address").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const ordersTable = pgTable(
+  "orders",
+  {
+    id: serial("id").primaryKey(),
+    orderNumber: varchar("order_number", { length: 40 }).notNull().unique(),
+    orderGroupNumber: varchar("order_group_number", { length: 40 }),
+    sellerId: integer("seller_id")
+      .notNull()
+      .references(() => sellerProfilesTable.id, { onDelete: "restrict" }),
+    buyerId: integer("buyer_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    status: orderStatusEnum("status").notNull().default("pending_payment"),
+    paymentStatus: paymentStatusEnum("payment_status").notNull().default("pending"),
+    paymentMode: paymentModeEnum("payment_mode").notNull().default("sandbox"),
+    totalNgn: integer("total_ngn").notNull(),
+    deliveryAddress: text("delivery_address").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("orders_order_group_number_idx").on(table.orderGroupNumber)],
+);
 
 export const orderItemsTable = pgTable("order_items", {
   id: serial("id").primaryKey(),
@@ -109,6 +115,28 @@ export const paymentsTable = pgTable("payments", {
   status: paymentStatusEnum("status").notNull().default("pending"),
   amountNgn: integer("amount_ngn").notNull(),
   providerReference: varchar("provider_reference", { length: 160 }).unique(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const checkoutPaymentsTable = pgTable("checkout_payments", {
+  id: serial("id").primaryKey(),
+  orderGroupNumber: varchar("order_group_number", { length: 40 })
+    .notNull()
+    .unique(),
+  buyerId: integer("buyer_id")
+    .notNull()
+    .references(() => usersTable.id, { onDelete: "restrict" }),
+  provider: paymentProviderEnum("provider").notNull(),
+  status: paymentStatusEnum("status").notNull().default("pending"),
+  amountNgn: integer("amount_ngn").notNull(),
+  providerReference: varchar("provider_reference", { length: 160 })
+    .notNull()
+    .unique(),
+  authorizationUrl: text("authorization_url"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

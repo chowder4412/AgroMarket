@@ -18,6 +18,8 @@ tags:
     description: Persistent shopping cart
   - name: orders
     description: Checkout and fulfilment
+  - name: payments
+    description: Payment methods and secure payment confirmation
   - name: seller
     description: Seller dashboard and inventory
   - name: quotations
@@ -227,7 +229,7 @@ paths:
     post:
       operationId: checkout
       tags: [orders]
-      summary: Validate stock and create a pending sandbox checkout order
+      summary: Validate stock and start sandbox or Paystack checkout
       requestBody:
         required: true
         content:
@@ -240,6 +242,45 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CheckoutResult" }
         "409": { description: One or more products are no longer available }
+  /payments/methods:
+    get:
+      operationId: getPaymentMethods
+      tags: [payments]
+      summary: List checkout methods available in this environment
+      responses:
+        "200":
+          description: Configured checkout methods
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentMethods" }
+  /payments/paystack/verify:
+    post:
+      operationId: verifyPaystackPayment
+      tags: [payments]
+      summary: Verify a Paystack payment for the signed-in buyer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaystackVerificationInput" }
+      responses:
+        "200":
+          description: Verified payment and related seller orders
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentVerification" }
+        "404": { description: Payment reference not found }
+        "409": { description: Payment does not belong to the signed-in buyer }
+  /payments/paystack/webhook:
+    post:
+      operationId: receivePaystackWebhook
+      tags: [payments]
+      summary: Receive signed Paystack transaction events
+      description: This endpoint verifies x-paystack-signature against the raw request body before processing.
+      responses:
+        "200": { description: Event acknowledged }
+        "401": { description: Invalid webhook signature }
+        "503": { description: Paystack secret is not configured }
   /orders:
     get:
       operationId: listOrders
@@ -533,16 +574,40 @@ components:
       properties:
         orderGroupNumber: { type: string }
         grandTotal: { type: number }
+        status: { type: string, enum: [pending, paid, failed] }
+        authorizationUrl: { type: [string, "null"], format: uri }
         orders:
           type: array
           items: { $ref: "#/components/schemas/Order" }
-      required: [orderGroupNumber, grandTotal, orders]
+      required: [orderGroupNumber, grandTotal, status, authorizationUrl, orders]
     CheckoutInput:
       type: object
       properties:
         deliveryAddress: { type: string, minLength: 8 }
-        paymentMode: { type: string, enum: [sandbox, provider_pending] }
+        paymentMode: { type: string, enum: [sandbox, paystack] }
       required: [deliveryAddress, paymentMode]
+    PaymentMethods:
+      type: object
+      properties:
+        sandboxAvailable: { type: boolean }
+        paystackAvailable: { type: boolean }
+      required: [sandboxAvailable, paystackAvailable]
+    PaystackVerificationInput:
+      type: object
+      properties:
+        reference: { type: string, minLength: 5, maxLength: 160 }
+      required: [reference]
+    PaymentVerification:
+      type: object
+      properties:
+        reference: { type: string }
+        status: { type: string, enum: [pending, paid, failed] }
+        orderGroupNumber: { type: string }
+        grandTotal: { type: number }
+        orders:
+          type: array
+          items: { $ref: "#/components/schemas/Order" }
+      required: [reference, status, orderGroupNumber, grandTotal, orders]
     SellerDashboard:
       type: object
       properties:
