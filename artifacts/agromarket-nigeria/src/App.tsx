@@ -5,16 +5,16 @@ import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import {
   getGetAccountQueryKey, getGetAdminDashboardQueryKey, getGetCartQueryKey, getGetProductQueryKey, getGetSellerDashboardQueryKey,
-  getGetPaymentMethodsQueryKey, getListAdminDisputesQueryKey, getListBuyerDisputesQueryKey, getListOrdersQueryKey, getListProductsQueryKey, getListQuotationsQueryKey,
+  getGetPaymentMethodsQueryKey, getGetPaystackPaymentSessionQueryKey, getListAdminDisputesQueryKey, getListBuyerDisputesQueryKey, getListOrdersQueryKey, getListProductsQueryKey, getListQuotationsQueryKey,
   getListSellerQuotationsQueryKey, getListSellerVerificationsQueryKey, useAddCartItem, useCheckout, useCreateProduct,
   useCreateQuotation, useGetCart, useGetProduct, useGetSellerDashboard,
-  useGetAccount, useGetAdminDashboard, useGetPaymentMethods, useHealthCheck, useListFeaturedFarms, useListOrders,
+  useGetAccount, useGetAdminDashboard, useGetPaymentMethods, useGetPaystackPaymentSession, useHealthCheck, useListFeaturedFarms, useListOrders,
   useListAdminDisputes, useListBuyerDisputes, useListProducts, useListQuotations, useListSellerQuotations, useListSellerVerifications, useRemoveCartItem,
   useCreateOrderDispute, useRequestAccountRole, useRespondToQuotation, useUpdateCartItem, useUpdateOrderDispute, useUpdateProduct, useUpdateQuotationResponse, useUpdateSellerOrderStatus, useVerifyPaystackPayment,
   useUpdateSellerVerification,
   setAuthTokenGetter, setBaseUrl,
 } from '@workspace/api-client-react';
-import type { CheckoutInput, PaymentVerification, Product, ProductCategory, ProductInput, ProductTier, ProductUnit } from '@workspace/api-client-react';
+import type { PaymentVerification, Product, ProductCategory, ProductInput, ProductTier, ProductUnit } from '@workspace/api-client-react';
 import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useParams } from 'wouter';
 import {
   ArrowDown, ArrowLeft, ArrowRight, BadgeCheck, Box, Check, CircleHelp,
@@ -97,6 +97,49 @@ function Notice({ children, tone = 'error' }: { children: ReactNode; tone?: 'err
   return <div role="status" data-testid={`notice-${tone}`} className={`rounded-xl border px-4 py-3 text-sm ${tone === 'error' ? 'border-red-200 bg-red-50 text-red-800' : tone === 'success' ? 'border-green-200 bg-green-50 text-green-900' : 'border-[#d9d2c3] bg-[#f5f0e6] text-[#42594a]'}`}>{children}</div>;
 }
 function Skeleton({ className = '' }: { className?: string }) { return <div className={`animate-pulse rounded-xl bg-secondary/70 ${className}`} />; }
+
+type PaystackInlineCallbacks = {
+  onSuccess: (transaction: { reference: string }) => void;
+  onCancel: () => void;
+  onError: (error: { message?: string }) => void;
+};
+
+declare global {
+  interface Window {
+    PaystackPop?: new () => {
+      resumeTransaction: (accessCode: string, callbacks: PaystackInlineCallbacks) => void;
+    };
+  }
+}
+
+function usePaystackInline() {
+  const [ready, setReady] = useState(() => typeof window !== 'undefined' && !!window.PaystackPop);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (window.PaystackPop) {
+      setReady(true);
+      return;
+    }
+    let script = document.querySelector<HTMLScriptElement>('script[data-paystack-inline]');
+    const shouldAppend = !script;
+    const onLoad = () => setReady(!!window.PaystackPop);
+    const onError = () => setFailed(true);
+    if (!script) {
+      script = document.createElement('script');
+      script.src = 'https://js.paystack.co/v2/inline.js';
+      script.async = true;
+      script.dataset.paystackInline = 'true';
+    }
+    script.addEventListener('load', onLoad);
+    script.addEventListener('error', onError);
+    if (shouldAppend) document.head.appendChild(script);
+    return () => {
+      script?.removeEventListener('load', onLoad);
+      script?.removeEventListener('error', onError);
+    };
+  }, []);
+  return { ready, failed };
+}
 
 function Header() {
   const { data: cart } = useGetCart({ query: { queryKey: getGetCartQueryKey(), retry: false } });
@@ -247,76 +290,74 @@ function ShoppingBasketIcon() { return <span className="mx-auto grid size-14 pla
 function CheckoutPage() {
   const cart = useGetCart({ query: { queryKey: getGetCartQueryKey(), retry: false } });
   const checkout = useCheckout();
+  const verify = useVerifyPaystackPayment();
   const methods = useGetPaymentMethods({ query: { queryKey: getGetPaymentMethodsQueryKey(), retry: false } });
+  const paystackInline = usePaystackInline();
   const { user } = useUser();
   const [address, setAddress] = useState('');
   const [email, setEmail] = useState('');
-  const [paymentMode, setPaymentMode] = useState<CheckoutInput['paymentMode']>('sandbox');
-  const [order, setOrder] = useState<Awaited<ReturnType<typeof checkout.mutateAsync>> | null>(null);
+  const [session, setSession] = useState<Awaited<ReturnType<typeof checkout.mutateAsync>> | null>(null);
+  const [payment, setPayment] = useState<PaymentVerification | null>(null);
+  const [paymentNotice, setPaymentNotice] = useState('');
+  const [paymentError, setPaymentError] = useState('');
   const client = useQueryClient();
   useEffect(() => {
     const primaryEmail = user?.primaryEmailAddress?.emailAddress;
     if (primaryEmail) setEmail(primaryEmail);
   }, [user?.primaryEmailAddress?.emailAddress]);
+
+  const openInlineCheckout = (accessCode: string) => {
+    if (!window.PaystackPop) {
+      setPaymentError('Paystack checkout could not load. Check your connection and retry.');
+      return;
+    }
+    setPaymentError('');
+    setPaymentNotice('');
+    new window.PaystackPop().resumeTransaction(accessCode, {
+      onSuccess: (transaction) => verify.mutate({ data: { reference: transaction.reference } }, {
+        onSuccess: (result) => {
+          setPayment(result);
+          client.invalidateQueries({ queryKey: getGetCartQueryKey() });
+          client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+        },
+        onError: () => setPaymentError('We could not verify the payment yet. Retry verification from this page.'),
+      }),
+      onCancel: () => setPaymentNotice('Payment was not completed. Your order is reserved temporarily; reopen Paystack to continue.'),
+      onError: (error) => setPaymentError(error.message || 'Paystack could not open this transaction.'),
+    });
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    checkout.mutate({ data: { deliveryAddress: address, paymentMode, ...(paymentMode === 'paystack' ? { email } : {}) } }, {
+    if (session) {
+      openInlineCheckout(session.accessCode);
+      return;
+    }
+    checkout.mutate({ data: { deliveryAddress: address, email } }, {
       onSuccess: (created) => {
-        if (created.status === 'pending' && created.authorizationUrl) {
-          window.location.assign(created.authorizationUrl);
-          return;
-        }
-        setOrder(created);
+        setSession(created);
         client.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+        openInlineCheckout(created.accessCode);
       },
     });
   };
-  if (order) return <main className="shell page-enter py-10 md:py-16"><div className="mx-auto max-w-3xl rounded-[28px] border border-border bg-card p-6 sm:p-9"><div className="text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-primary"><Check size={30} /></span><p className="mt-5 text-xs font-bold uppercase tracking-[.18em] text-primary">Demo checkout complete</p><h1 className="serif mt-2 text-4xl">Your orders are in the books.</h1><p className="mt-3 text-muted-foreground">Order group <strong data-testid="text-order-group-number">{order.orderGroupNumber}</strong></p><p className="mt-2 text-sm text-muted-foreground">Combined order total <strong className="text-foreground" data-testid="text-checkout-grand-total">{money(order.grandTotal)}</strong></p></div><div className="mt-6 rounded-xl border border-[#d8b88d] bg-[#fff5e5] p-4 text-sm text-[#644b2d]" data-testid="notice-sandbox-payment"><p className="font-bold">Payment simulation: sandbox / demo only</p><p className="mt-1">No money was charged. This creates test order records only; no live payment was processed.</p></div><section className="mt-8"><div className="mb-3 flex items-center justify-between"><h2 className="serif text-2xl">Seller orders</h2><span className="text-xs text-muted-foreground">{order.orders.length} seller{order.orders.length === 1 ? '' : 's'}</span></div><div className="space-y-3">{order.orders.map((sellerOrder) => <article key={sellerOrder.id} className="rounded-2xl border border-border bg-background p-4" data-testid={`card-checkout-order-${sellerOrder.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.15em] text-primary">{sellerOrder.sellerName}</p><p className="mt-1 font-bold" data-testid={`text-checkout-order-number-${sellerOrder.id}`}>{sellerOrder.orderNumber}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold" data-testid={`status-checkout-order-${sellerOrder.id}`}>{pretty(sellerOrder.status)}</span></div><div className="mt-3 space-y-1 border-t border-border pt-3">{sellerOrder.items.map((item, index) => <p key={`${sellerOrder.id}-${item.productId}-${index}`} className="flex justify-between gap-3 text-sm"><span>{item.quantity} × {item.name}</span><span className="text-muted-foreground">{money(item.unitPrice * item.quantity)}</span></p>)}</div><div className="mt-3 flex justify-between border-t border-border pt-3 text-sm"><span className="text-muted-foreground">Seller order total</span><strong>{money(sellerOrder.total)}</strong></div></article>)}</div></section><div className="mt-7 flex flex-wrap justify-center gap-3"><Link href="/orders" className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 font-bold text-primary-foreground" data-testid="link-view-orders">View your orders <ArrowRight size={16} /></Link><Link href="/" className="inline-flex items-center rounded-full border border-border px-6 py-3 text-sm font-bold" data-testid="link-return-market-checkout">Return to market</Link></div></div></main>;
-  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Sandbox checkout" title="Delivery details" description="Checkout is for demo and testing only. No payment will be collected." />
+  if (payment?.status === 'paid') return <main className="shell page-enter py-10 md:py-16"><div className="mx-auto max-w-3xl rounded-[28px] border border-border bg-card p-6 sm:p-9"><div className="text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-primary"><Check size={30} /></span><p className="mt-5 text-xs font-bold uppercase tracking-[.18em] text-primary">Payment confirmed</p><h1 className="serif mt-2 text-4xl">Your orders are in the books.</h1><p className="mt-3 text-muted-foreground">Order group <strong data-testid="text-order-group-number">{payment.orderGroupNumber}</strong></p><p className="mt-2 text-sm text-muted-foreground">Combined order total <strong className="text-foreground" data-testid="text-checkout-grand-total">{money(payment.grandTotal)}</strong></p></div><section className="mt-8"><div className="mb-3 flex items-center justify-between"><h2 className="serif text-2xl">Seller orders</h2><span className="text-xs text-muted-foreground">{payment.orders.length} seller{payment.orders.length === 1 ? '' : 's'}</span></div><div className="space-y-3">{payment.orders.map((sellerOrder) => <article key={sellerOrder.id} className="rounded-2xl border border-border bg-background p-4" data-testid={`card-checkout-order-${sellerOrder.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.15em] text-primary">{sellerOrder.sellerName}</p><p className="mt-1 font-bold" data-testid={`text-checkout-order-number-${sellerOrder.id}`}>{sellerOrder.orderNumber}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(sellerOrder.status)}</span></div><div className="mt-3 space-y-1 border-t border-border pt-3">{sellerOrder.items.map((item, index) => <p key={`${sellerOrder.id}-${item.productId}-${index}`} className="flex justify-between gap-3 text-sm"><span>{item.quantity} × {item.name}</span><span className="text-muted-foreground">{money(item.unitPrice * item.quantity)}</span></p>)}</div><div className="mt-3 flex justify-between border-t border-border pt-3 text-sm"><span className="text-muted-foreground">Seller order total</span><strong>{money(sellerOrder.total)}</strong></div></article>)}</div></section><div className="mt-7 flex justify-center"><Link href="/orders" className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 font-bold text-primary-foreground" data-testid="link-view-orders">View your orders <ArrowRight size={16} /></Link></div></div></main>;
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Secure Paystack checkout" title="Delivery details" description="Your payment is handled securely by Paystack inside this checkout." />
     <div className="grid items-start gap-8 lg:grid-cols-[1fr_360px]"><form onSubmit={submit} className="space-y-6 rounded-[24px] border border-border bg-card p-5 sm:p-7">
-      <div className="flex gap-3 rounded-xl border border-[#d8b88d] bg-[#fff5e5] p-4 text-sm text-[#644b2d]"><CircleHelp size={19} className="mt-0.5 shrink-0" /><div><strong>Sandbox / demo checkout</strong><p className="mt-1">No money is charged. This creates a pending test order only.</p></div></div>
       <label className="block"><span className="mb-2 block text-sm font-bold">Delivery address</span><textarea required minLength={8} rows={4} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="House number, street, area, city and state" className="w-full resize-y rounded-xl border border-input bg-background px-4 py-3 outline-none focus:ring-2 focus:ring-primary/30" data-testid="input-delivery-address" /></label>
-      <fieldset className="space-y-3"><legend className="mb-2 text-sm font-bold">Payment method</legend>
-        <label className={`flex cursor-pointer gap-3 rounded-xl border p-4 ${paymentMode === 'sandbox' ? 'border-primary bg-[#edf3e8]' : 'border-border'}`}><input type="radio" name="payment-mode" value="sandbox" checked={paymentMode === 'sandbox'} onChange={() => setPaymentMode('sandbox')} /><span><strong className="block text-sm">Sandbox demo</strong><span className="mt-1 block text-xs text-muted-foreground">Test order only. No money is charged.</span></span></label>
-        <label className={`flex gap-3 rounded-xl border p-4 ${methods.data?.paystackAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'} ${paymentMode === 'paystack' ? 'border-primary bg-[#edf3e8]' : 'border-border'}`}><input type="radio" name="payment-mode" value="paystack" checked={paymentMode === 'paystack'} disabled={!methods.data?.paystackAvailable} onChange={() => setPaymentMode('paystack')} /><span><strong className="block text-sm">Pay online with Paystack</strong><span className="mt-1 block text-xs text-muted-foreground">{methods.isLoading ? 'Checking availability…' : methods.data?.paystackAvailable ? 'Secure NGN checkout.' : 'Unavailable until the server is configured.'}</span></span></label>
-      </fieldset>
-      {paymentMode === 'paystack' && <Field label="Payment email" value={email} onChange={setEmail} type="email" required testId="input-payment-email" placeholder="you@example.com" />}
-      {checkout.isError && <Notice>We couldn't create the demo order. Please check your address and try again.</Notice>}
-      {methods.isError && <Notice>Payment options could not be loaded. Sandbox remains available.</Notice>}
-      <Button type="submit" disabled={checkout.isPending || !address.trim() || (paymentMode === 'paystack' && !email.trim()) || cart.isLoading || !cart.data?.items?.length} className="w-full bg-primary text-primary-foreground hover:bg-[#214b37]" data-testid="button-place-sandbox-order">{checkout.isPending ? 'Starting checkout…' : paymentMode === 'paystack' ? 'Continue to Paystack' : 'Create sandbox order'} <ArrowRight size={16} /></Button>
+      <Field label="Payment email" value={email} onChange={setEmail} type="email" required testId="input-payment-email" placeholder="you@example.com" />
+      {!methods.isLoading && !methods.data?.paystackAvailable && <Notice>Paystack checkout is not configured for this store yet.</Notice>}
+      {methods.isError && <Notice>Paystack options could not be loaded. Please retry.</Notice>}
+      {paymentNotice && <Notice tone="info">{paymentNotice}</Notice>}
+      {paymentError && <Notice>{paymentError}</Notice>}
+      {checkout.isError && <Notice>We couldn't initialize Paystack checkout. Your basket is unchanged. Please try again.</Notice>}
+      {verify.isError && <Notice>We couldn't verify the payment yet. Reopen Paystack or check your orders before retrying.</Notice>}
+      {payment?.status === 'pending' && <Notice tone="info">Paystack is still processing the payment. Do not start a second checkout.</Notice>}
+      {payment?.status === 'failed' && <Notice>The payment was not completed. You can reopen this Paystack session.</Notice>}
+      <Button type="submit" disabled={checkout.isPending || verify.isPending || !paystackInline.ready || !address.trim() || !email.trim() || !methods.data?.paystackAvailable || (!session && !cart.data?.items?.length)} className="w-full bg-primary text-primary-foreground hover:bg-[#214b37]" data-testid="button-start-paystack-checkout">{checkout.isPending ? 'Preparing secure checkout…' : verify.isPending ? 'Verifying payment…' : session ? 'Resume Paystack checkout' : paystackInline.failed ? 'Paystack checkout unavailable' : 'Continue with Paystack'} <ArrowRight size={16} /></Button>
+      {paystackInline.failed && <p className="text-sm text-red-700">Paystack's secure checkout could not load. Check your connection and reload.</p>}
     </form><aside className="rounded-[24px] border border-border bg-card p-5"><h2 className="serif text-2xl">Your basket</h2>{cart.isLoading ? <Skeleton className="mt-4 h-20" /> : cart.isError ? <Notice>Sign in to load your basket. <Link href="/sign-in" className="underline" data-testid="link-checkout-sign-in">Sign in</Link></Notice> : cart.data?.items?.length ? <><div className="mt-4 space-y-3">{cart.data.items.map((item) => <div key={item.id} className="flex justify-between gap-3 text-sm" data-testid={`text-checkout-item-${item.id}`}><span>{item.quantity} × {item.name}</span><span className="font-semibold">{money(item.unitPrice * item.quantity)}</span></div>)}</div><div className="mt-5 flex justify-between border-t border-border pt-4 font-bold"><span>Subtotal</span><span>{money(cart.data.subtotal)}</span></div></> : <p className="mt-4 text-sm text-muted-foreground">Your basket is empty.</p>}</aside></div>
   </main>;
-}
-
-function PaystackReturnPage() {
-  const verify = useVerifyPaystackPayment();
-  const [payment, setPayment] = useState<PaymentVerification | null>(null);
-  const [reference] = useState(() => new URLSearchParams(window.location.search).get('reference') || '');
-  const client = useQueryClient();
-  const verifyPayment = () => {
-    if (!reference) return;
-    verify.mutate({ data: { reference } }, {
-      onSuccess: (result) => {
-        setPayment(result);
-        client.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
-      },
-    });
-  };
-  useEffect(() => { verifyPayment(); }, [reference]);
-  const status = payment?.status;
-  return <main className="shell page-enter py-12 md:py-16"><section className="mx-auto max-w-2xl rounded-[24px] border border-border bg-card p-6 text-center sm:p-9">
-    <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Paystack checkout</p>
-    <h1 className="serif mt-3 text-4xl">{verify.isPending ? 'Confirming your payment' : status === 'paid' ? 'Payment confirmed' : status === 'failed' ? 'Payment not completed' : 'Payment status'}</h1>
-    {verify.isPending && <p className="mt-3 text-sm text-muted-foreground">Please keep this page open while we verify the transaction with Paystack.</p>}
-    {verify.isError && <div className="mt-5"><Notice>We could not confirm the payment yet. You can safely retry verification.</Notice></div>}
-    {!reference && <div className="mt-5"><Notice>No payment reference was returned. Check your orders before trying checkout again.</Notice></div>}
-    {status === 'pending' && <div className="mt-5"><Notice tone="info">Paystack has not confirmed this payment yet. Your reserved stock will be released automatically if payment expires.</Notice></div>}
-    {status === 'failed' && <div className="mt-5"><Notice>Paystack reported that this payment failed or was abandoned. No order was marked paid.</Notice></div>}
-    {payment && <p className="mt-5 text-sm text-muted-foreground">Order group <strong className="text-foreground">{payment.orderGroupNumber}</strong> · {money(payment.grandTotal)}</p>}
-    <div className="mt-7 flex flex-wrap justify-center gap-3"><button type="button" onClick={verifyPayment} disabled={!reference || verify.isPending} className="rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50" data-testid="button-retry-payment-verification">Verify again</button><Link href="/orders" className="inline-flex items-center rounded-full border border-border px-5 py-3 text-sm font-bold" data-testid="link-paystack-orders">View orders</Link><Link href="/" className="inline-flex items-center rounded-full border border-border px-5 py-3 text-sm font-bold" data-testid="link-paystack-market">Return to market</Link></div>
-  </section></main>;
 }
 
 function OrdersPage() {
@@ -535,15 +576,39 @@ function SellerQuotationsPage() {
 function BuyerQuotationResponsesPage() {
   const quotes = useListQuotations({ query: { queryKey: getListQuotationsQueryKey(), retry: false } });
   const methods = useGetPaymentMethods({ query: { queryKey: getGetPaymentMethodsQueryKey(), retry: false } });
+  const paystackInline = usePaystackInline();
+  const verify = useVerifyPaystackPayment();
   const { user } = useUser();
   const update = useUpdateQuotationResponse();
   const client = useQueryClient();
-  const [checkoutInputs, setCheckoutInputs] = useState<Record<number, { deliveryAddress: string; paymentMode: CheckoutInput['paymentMode']; email: string }>>({});
+  const [checkoutInputs, setCheckoutInputs] = useState<Record<number, { deliveryAddress: string; email: string }>>({});
+  const [sessions, setSessions] = useState<Record<number, { accessCode: string; reference: string; orderGroupNumber: string }>>({});
   const [completedGroups, setCompletedGroups] = useState<Record<number, string>>({});
+  const [paymentErrors, setPaymentErrors] = useState<Record<number, string>>({});
+  const [paymentNotices, setPaymentNotices] = useState<Record<number, string>>({});
   const checkoutFor = (id: number) => checkoutInputs[id] ?? {
     deliveryAddress: '',
-    paymentMode: methods.data?.paystackAvailable ? 'paystack' as const : 'sandbox' as const,
     email: user?.primaryEmailAddress?.emailAddress || '',
+  };
+  const openInline = (id: number, accessCode: string) => {
+    if (!window.PaystackPop) {
+      setPaymentErrors((current) => ({ ...current, [id]: 'Paystack checkout could not load. Check your connection and retry.' }));
+      return;
+    }
+    setPaymentErrors((current) => ({ ...current, [id]: '' }));
+    new window.PaystackPop().resumeTransaction(accessCode, {
+      onSuccess: (transaction) => verify.mutate({ data: { reference: transaction.reference } }, {
+        onSuccess: (result) => {
+          client.invalidateQueries({ queryKey: getListQuotationsQueryKey() });
+          client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+          if (result.status === 'paid') setCompletedGroups((current) => ({ ...current, [id]: result.orderGroupNumber }));
+          else setPaymentNotices((current) => ({ ...current, [id]: 'Paystack is still processing the payment. Check your orders before retrying.' }));
+        },
+        onError: () => setPaymentErrors((current) => ({ ...current, [id]: 'Payment could not be verified yet. Check your orders before retrying.' })),
+      }),
+      onCancel: () => setPaymentNotices((current) => ({ ...current, [id]: 'Payment was not completed. Resume this Paystack session to continue.' })),
+      onError: (error) => setPaymentErrors((current) => ({ ...current, [id]: error.message || 'Paystack could not open this transaction.' })),
+    });
   };
   const decide = (id: number, responseId: number, status: 'accepted' | 'declined') => {
     const checkout = checkoutFor(id);
@@ -551,34 +616,35 @@ function BuyerQuotationResponsesPage() {
       status,
       ...(status === 'accepted' ? {
         deliveryAddress: checkout.deliveryAddress,
-        paymentMode: checkout.paymentMode,
-        ...(checkout.paymentMode === 'paystack' ? { email: checkout.email } : {}),
+        email: checkout.email,
       } : {}),
     } }, {
       onSuccess: (result) => {
         client.invalidateQueries({ queryKey: getListQuotationsQueryKey() });
         client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
-        client.invalidateQueries({ queryKey: getGetCartQueryKey() });
-        if (result.authorizationUrl) {
-          window.location.assign(result.authorizationUrl);
-        } else if (result.status === 'paid' && result.orderGroupNumber) {
-          setCompletedGroups((current) => ({ ...current, [id]: result.orderGroupNumber! }));
+        if (status === 'accepted' && result.accessCode && result.reference && result.orderGroupNumber) {
+          const session = { accessCode: result.accessCode, reference: result.reference, orderGroupNumber: result.orderGroupNumber };
+          setSessions((current) => ({ ...current, [id]: session }));
+          openInline(id, session.accessCode);
         }
       },
     });
   };
   return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Business buying" title="Supplier responses" description="Compare supplier totals and record which offer you want to proceed with." action={<Link href="/business/quotations" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary"><ArrowLeft size={16} />Back to requests</Link>} />
-    {methods.isError && <Notice>Payment options could not be loaded. Sandbox remains available.</Notice>}
+    {methods.isError && <Notice>Paystack payment options could not be loaded. Retry after checking your connection.</Notice>}
     {quotes.isLoading ? <Skeleton className="h-40" /> : quotes.isError ? <Notice>Sign in as a business buyer to view supplier responses. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !quotes.data?.length ? <p className="text-sm text-muted-foreground">Send a request to receive supplier responses.</p> : <div className="space-y-4">{quotes.data.map((quote) => {
       const checkout = checkoutFor(quote.id);
       const openResponses = quote.responses.some((response) => response.status === 'quoted') && quote.status !== 'accepted' && quote.status !== 'declined';
-      const canPay = checkout.paymentMode !== 'paystack' || (!!methods.data?.paystackAvailable && !!checkout.email.trim());
+      const canPay = !!methods.data?.paystackAvailable && !!checkout.email.trim() && paystackInline.ready;
       return <article key={quote.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-buyer-quotation-${quote.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="serif text-2xl">{quote.businessName}</h2><p className="mt-1 text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(quote.status)}</span></div>
-        <div className="mt-4 space-y-3">{quote.responses.length ? quote.responses.map((response) => <div key={response.id} className="rounded-xl border border-border bg-background p-4" data-testid={`card-quotation-response-${response.id}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="font-bold">{response.sellerName}</p><p className="mt-1 text-lg font-bold">{response.totalNgn === null ? 'Declined' : money(response.totalNgn)}</p>{response.message && <p className="mt-1 text-sm text-muted-foreground">{response.message}</p>}</div><span className="w-fit rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response.status)}</span>{response.status === 'quoted' && openResponses && <div className="flex gap-2"><Button onClick={() => decide(quote.id, response.id, 'accepted')} disabled={update.isPending || checkout.deliveryAddress.trim().length < 8 || !canPay} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-accept-quotation-${response.id}`}>Accept & create order</Button><Button onClick={() => decide(quote.id, response.id, 'declined')} disabled={update.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-response-${response.id}`}>Decline</Button></div>}</div>
+        <div className="mt-4 space-y-3">{quote.responses.length ? quote.responses.map((response) => <div key={response.id} className="rounded-xl border border-border bg-background p-4" data-testid={`card-quotation-response-${response.id}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="font-bold">{response.sellerName}</p><p className="mt-1 text-lg font-bold">{response.totalNgn === null ? 'Declined' : money(response.totalNgn)}</p>{response.message && <p className="mt-1 text-sm text-muted-foreground">{response.message}</p>}</div><span className="w-fit rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response.status)}</span>{response.status === 'quoted' && openResponses && <div className="flex gap-2"><Button onClick={() => decide(quote.id, response.id, 'accepted')} disabled={update.isPending || checkout.deliveryAddress.trim().length < 8 || !canPay} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-accept-quotation-${response.id}`}>{paystackInline.ready ? 'Accept & pay with Paystack' : 'Loading secure checkout…'}</Button><Button onClick={() => decide(quote.id, response.id, 'declined')} disabled={update.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-response-${response.id}`}>Decline</Button></div>}</div>
           {!!response.items.length && <div className="mt-3 divide-y divide-border rounded-lg border border-border">{response.items.map((item) => <div key={item.quotationItemId} className="flex justify-between gap-3 px-3 py-2 text-sm"><span>{item.quantity} × {item.name} · {money(item.unitPriceNgn)}/{item.unit}</span><span className="font-semibold">{money(item.quantity * item.unitPriceNgn)}</span></div>)}</div>}
         </div>) : <p className="rounded-xl bg-secondary/40 p-4 text-sm text-muted-foreground">No suppliers have responded yet.</p>}</div>
-        {openResponses && <div className="mt-4 grid gap-3 rounded-xl bg-secondary/40 p-4 md:grid-cols-3"><Field label="Delivery address" value={checkout.deliveryAddress} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, deliveryAddress: value } }))} required testId={`input-quote-delivery-address-${quote.id}`} placeholder="Street, area, city and state" /><label className="block"><span className="mb-2 block text-sm font-bold">Payment method</span><select value={checkout.paymentMode} onChange={(event) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, paymentMode: event.target.value as CheckoutInput['paymentMode'] } }))} className="h-12 w-full rounded-xl border border-input bg-background px-3" data-testid={`select-quote-payment-mode-${quote.id}`}><option value="sandbox">Sandbox demo</option><option value="paystack" disabled={!methods.data?.paystackAvailable}>Paystack</option></select></label>{checkout.paymentMode === 'paystack' && <Field label="Payment email" value={checkout.email} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, email: value } }))} type="email" required testId={`input-quote-payment-email-${quote.id}`} placeholder="you@example.com" />}</div>}
-        {completedGroups[quote.id] && <div className="mt-4"><Notice tone="success">Sandbox order {completedGroups[quote.id]} was created. No payment was collected. <Link href="/orders" className="font-bold underline">View your orders</Link></Notice></div>}
+        {openResponses && <div className="mt-4 grid gap-3 rounded-xl bg-secondary/40 p-4 md:grid-cols-2"><Field label="Delivery address" value={checkout.deliveryAddress} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, deliveryAddress: value } }))} required testId={`input-quote-delivery-address-${quote.id}`} placeholder="Street, area, city and state" /><Field label="Payment email" value={checkout.email} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, email: value } }))} type="email" required testId={`input-quote-payment-email-${quote.id}`} placeholder="you@example.com" /></div>}
+        {sessions[quote.id] && !completedGroups[quote.id] && <div className="mt-4 flex flex-wrap items-center gap-3"><Button type="button" onClick={() => openInline(quote.id, sessions[quote.id].accessCode)} disabled={!paystackInline.ready || verify.isPending} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-resume-quotation-payment-${quote.id}`}>Resume Paystack checkout</Button><span className="text-xs text-muted-foreground">Order group {sessions[quote.id].orderGroupNumber}</span></div>}
+        {completedGroups[quote.id] && <div className="mt-4"><Notice tone="success">Payment confirmed for order {completedGroups[quote.id]}. <Link href="/orders" className="font-bold underline">View your orders</Link></Notice></div>}
+        {paymentNotices[quote.id] && <div className="mt-4"><Notice tone="info">{paymentNotices[quote.id]}</Notice></div>}
+        {paymentErrors[quote.id] && <div className="mt-4"><Notice>{paymentErrors[quote.id]}</Notice></div>}
         {update.isError && <div className="mt-3"><Notice>We couldn't save that decision or create the order. Please try again.</Notice></div>}
         {quote.status === 'accepted' && !completedGroups[quote.id] && <p className="mt-4 text-sm text-muted-foreground">This supplier quote has been accepted.</p>}
       </article>;
@@ -702,8 +768,46 @@ function AccountControls() {
   if (!isSignedIn) return null;
   return <div className="hidden items-center justify-end gap-3 border-b border-border bg-card/70 px-5 py-2 lg:flex"><span className="max-w-36 truncate text-xs font-semibold text-muted-foreground">{user?.firstName || user?.primaryEmailAddress?.emailAddress}</span>{account.data?.roles.includes('admin') && <Link href="/admin" className="text-sm font-semibold text-primary" data-testid="link-admin-dashboard">Admin desk</Link>}{account.data?.roles.some((role) => role === 'farmer' || role === 'supplier') && <Link href="/seller/quotations" className="text-sm font-semibold text-primary" data-testid="link-seller-quotations">Quote requests</Link>}<LogoutButton /></div>;
 }
+function PendingPaystackPaymentButton({ orderId }: { orderId: number }) {
+  const inline = usePaystackInline();
+  const session = useGetPaystackPaymentSession(orderId, { query: { queryKey: getGetPaystackPaymentSessionQueryKey(orderId), enabled: false, retry: false } });
+  const verify = useVerifyPaystackPayment();
+  const client = useQueryClient();
+  const [message, setMessage] = useState('');
+  const resume = async () => {
+    setMessage('');
+    const result = await session.refetch();
+    if (!result.data) {
+      setMessage(result.error instanceof Error ? result.error.message : 'This Paystack session is unavailable.');
+      return;
+    }
+    if (!window.PaystackPop) {
+      setMessage('Paystack checkout could not load. Check your connection and retry.');
+      return;
+    }
+    new window.PaystackPop().resumeTransaction(result.data.accessCode, {
+      onSuccess: (transaction) => verify.mutate({ data: { reference: transaction.reference } }, {
+        onSuccess: (payment) => {
+          setMessage(payment.status === 'paid' ? 'Payment confirmed.' : 'Payment is still processing. Check your orders shortly.');
+          client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+        },
+        onError: () => setMessage('We could not verify this payment yet. Check your orders before retrying.'),
+      }),
+      onCancel: () => setMessage('Payment was not completed. Your Paystack session remains available.'),
+      onError: (error) => setMessage(error.message || 'Paystack could not open this transaction.'),
+    });
+  };
+  return <div className="flex flex-col items-start gap-1"><Button type="button" onClick={resume} disabled={!inline.ready || session.isFetching || verify.isPending} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-resume-payment-${orderId}`}>{session.isFetching || verify.isPending ? 'Checking payment…' : 'Resume Paystack payment'}</Button>{message && <span role="status" className="text-xs text-muted-foreground">{message}</span>}</div>;
+}
+function PendingPaymentRecovery() {
+  const { isSignedIn } = useUser();
+  const orders = useListOrders({ query: { queryKey: getListOrdersQueryKey(), enabled: !!isSignedIn, retry: false } });
+  const pending = orders.data?.filter((order) => order.paymentMode === 'provider_pending' && order.paymentStatus === 'pending') || [];
+  if (!pending.length) return null;
+  return <section aria-label="Pending Paystack payments" className="border-b border-[#d8b88d] bg-[#fff5e5] text-[#644b2d]">{pending.map((order) => <div key={order.id} className="shell flex flex-wrap items-center justify-between gap-3 py-3"><p className="text-sm">Payment pending for <strong>{order.orderNumber}</strong> · {money(order.total)}</p><PendingPaystackPaymentButton orderId={order.id} /></div>)}</section>;
+}
 function AppFrame({ children }: { children: ReactNode }) {
-  return <><Header /><AccountControls />{children}<Footer /></>;
+  return <><Header /><AccountControls /><PendingPaymentRecovery />{children}<Footer /></>;
 }
 function AppRoutes() {
   return <Switch>
@@ -711,7 +815,6 @@ function AppRoutes() {
     <Route path="/products/:id" component={() => <AppFrame><ProductDetails /></AppFrame>} />
     <Route path="/cart" component={() => <AppFrame><CartPage /></AppFrame>} />
     <Route path="/checkout" component={() => <AppFrame><CheckoutPage /></AppFrame>} />
-    <Route path="/checkout/paystack/return" component={() => <AppFrame><PaystackReturnPage /></AppFrame>} />
     <Route path="/orders" component={() => <AppFrame><OrdersPage /></AppFrame>} />
     <Route path="/orders/disputes" component={() => <AppFrame><OrderDisputesPage /></AppFrame>} />
     <Route path="/seller" component={() => <AppFrame><SellerDashboard /></AppFrame>} />

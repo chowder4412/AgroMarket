@@ -309,8 +309,9 @@ async function createPaystackCheckout(
   });
 
   let authorizationUrl: string;
+  let accessCode: string;
   try {
-    ({ authorizationUrl } = await initializePaystackTransaction({
+    ({ authorizationUrl, accessCode } = await initializePaystackTransaction({
       email,
       amountNgn: checkout.total,
       reference,
@@ -320,6 +321,11 @@ async function createPaystackCheckout(
     await markPaystackPaymentFailed(reference, `initialize-failed:${groupNumber}`);
     throw new Error("Paystack could not start this payment. Your cart is unchanged.");
   }
+
+  await db
+    .update(checkoutPaymentsTable)
+    .set({ authorizationUrl, accessCode })
+    .where(eq(checkoutPaymentsTable.providerReference, reference));
 
   await db
     .delete(cartItemsTable)
@@ -335,6 +341,8 @@ async function createPaystackCheckout(
     grandTotal: checkout.total,
     status: "pending",
     authorizationUrl,
+    accessCode,
+    reference,
     orders: orders.filter((order) => order !== null),
   });
 }
@@ -483,180 +491,19 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    if (parsed.data.paymentMode === "paystack") {
-      if (!isPaystackConfigured()) {
-        res.status(503).json({ error: "Paystack is not configured." });
-        return;
-      }
-      const email = parsed.data.email?.trim();
-      if (!email) {
-        res.status(400).json({ error: "An email address is required for Paystack checkout." });
-        return;
-      }
-      try {
-        res.status(201).json(
-          await createPaystackCheckout(
-            req.marketplaceUserId!,
-            parsed.data.deliveryAddress,
-            email,
-          ),
-        );
-      } catch (error) {
-        if (error instanceof StockChangedError) {
-          res.status(409).json({ error: error.message });
-          return;
-        }
-        if (error instanceof Error && error.message === "Your cart is empty.") {
-          res.status(400).json({ error: error.message });
-          return;
-        }
-        if (
-          error instanceof Error &&
-          error.message === "Paystack could not start this payment. Your cart is unchanged."
-        ) {
-          res.status(502).json({ error: error.message });
-          return;
-        }
-        throw error;
-      }
+    if (!isPaystackConfigured()) {
+      res.status(503).json({ error: "Paystack is not configured." });
       return;
     }
-
-    const userId = req.marketplaceUserId!;
-    const groupNumber = `AM-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const email = parsed.data.email.trim();
     try {
-      const cart = await ensureCart(userId);
-      const orderIds = await db.transaction(async (tx) => {
-        const rows = await tx
-          .select({
-            cartItemId: cartItemsTable.id,
-            productId: productsTable.id,
-            sellerId: productsTable.sellerId,
-            name: productsTable.name,
-            unit: productsTable.unit,
-            price: productsTable.priceNgn,
-            minOrder: productsTable.minOrder,
-            quantity: cartItemsTable.quantity,
-            status: productsTable.status,
-            stock: inventoryTable.quantity,
-            reserved: inventoryTable.reserved,
-          })
-          .from(cartItemsTable)
-          .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
-          .innerJoin(
-            inventoryTable,
-            eq(productsTable.id, inventoryTable.productId),
-          )
-          .where(eq(cartItemsTable.cartId, cart.id));
-        if (!rows.length) throw new Error("Your cart is empty.");
-
-        const productIds = rows.map((row) => row.productId);
-        const tiers = await tx
-          .select({
-            productId: productWholesaleTiersTable.productId,
-            minQuantity: productWholesaleTiersTable.minQuantity,
-            unitPriceNgn: productWholesaleTiersTable.unitPriceNgn,
-          })
-          .from(productWholesaleTiersTable)
-          .where(inArray(productWholesaleTiersTable.productId, productIds))
-          .orderBy(asc(productWholesaleTiersTable.minQuantity));
-
-        const groups = new Map<number, typeof rows>();
-        for (const row of rows) {
-          if (row.status !== "active" || row.quantity < row.minOrder) {
-            throw new StockChangedError("A product is no longer available in that quantity.");
-          }
-          const [updatedInventory] = await tx
-            .update(inventoryTable)
-            .set({
-              quantity: sql`${inventoryTable.quantity} - ${row.quantity}`,
-            })
-            .where(
-              and(
-                eq(inventoryTable.productId, row.productId),
-                sql`${inventoryTable.quantity} - ${inventoryTable.reserved} >= ${row.quantity}`,
-              ),
-            )
-            .returning({ productId: inventoryTable.productId });
-          if (!updatedInventory) {
-            throw new StockChangedError(
-              "Stock changed while checking out. Review your cart and try again.",
-            );
-          }
-          const group = groups.get(row.sellerId) ?? [];
-          group.push(row);
-          groups.set(row.sellerId, group);
-        }
-
-        const createdOrderIds: number[] = [];
-        let sellerIndex = 1;
-        for (const [sellerId, sellerRows] of groups) {
-          const lines = sellerRows.map((row) => {
-            const applicable = tiers
-              .filter(
-                (tier) =>
-                  tier.productId === row.productId &&
-                  tier.minQuantity <= row.quantity,
-              )
-              .at(-1);
-            return {
-              ...row,
-              unitPrice: applicable?.unitPriceNgn ?? row.price,
-            };
-          });
-          const total = lines.reduce(
-            (sum, line) => sum + line.unitPrice * line.quantity,
-            0,
-          );
-          const [order] = await tx
-            .insert(ordersTable)
-            .values({
-              orderNumber: `${groupNumber}-${String(sellerIndex).padStart(2, "0")}`,
-              orderGroupNumber: groupNumber,
-              sellerId,
-              buyerId: userId,
-              status: "paid",
-              paymentStatus: "paid",
-              paymentMode: "sandbox",
-              totalNgn: total,
-              deliveryAddress: parsed.data.deliveryAddress,
-            })
-            .returning({ id: ordersTable.id });
-          await tx.insert(orderItemsTable).values(
-            lines.map((line) => ({
-              orderId: order.id,
-              productId: line.productId,
-              sellerId,
-              productName: line.name,
-              unit: line.unit,
-              unitPriceNgn: line.unitPrice,
-              quantity: line.quantity,
-            })),
-          );
-          await tx.insert(paymentsTable).values({
-            orderId: order.id,
-            provider: "sandbox",
-            status: "paid",
-            amountNgn: total,
-            providerReference: `${groupNumber}-${sellerIndex}`,
-          });
-          createdOrderIds.push(order.id);
-          sellerIndex += 1;
-        }
-        await tx.delete(cartItemsTable).where(eq(cartItemsTable.cartId, cart.id));
-        return createdOrderIds;
-      });
-
-      const orders = await Promise.all(orderIds.map(orderPayload));
-      const validOrders = orders.filter((order) => order !== null);
-      const result = CheckoutResponse.parse({
-        orderGroupNumber: groupNumber,
-        grandTotal: validOrders.reduce((sum, order) => sum + order.total, 0),
-        status: "paid",
-        authorizationUrl: null,
-        orders: validOrders,
-      });
-      res.status(201).json(result);
+      res.status(201).json(
+        await createPaystackCheckout(
+          req.marketplaceUserId!,
+          parsed.data.deliveryAddress,
+          email,
+        ),
+      );
     } catch (error) {
       if (error instanceof StockChangedError) {
         res.status(409).json({ error: error.message });
@@ -666,8 +513,16 @@ router.post(
         res.status(400).json({ error: error.message });
         return;
       }
+      if (
+        error instanceof Error &&
+        error.message === "Paystack could not start this payment. Your cart is unchanged."
+      ) {
+        res.status(502).json({ error: error.message });
+        return;
+      }
       throw error;
     }
+    return;
   },
 );
 

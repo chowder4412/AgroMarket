@@ -3,7 +3,13 @@ import { createHmac } from "node:crypto";
 import { test } from "node:test";
 
 process.env.PAYSTACK_SECRET_KEY = "unit-test-paystack-secret";
-const { matchesExpectedPayment, verifyPaystackSignature } = await import(
+delete process.env.PAYSTACK_PUBLIC_KEY;
+const {
+  isPaystackConfigured,
+  isPaystackSecretConfigured,
+  matchesExpectedPayment,
+  verifyPaystackSignature,
+} = await import(
   "./paystack-security.ts"
 );
 const { canTransitionDispute } = await import("./dispute-state.ts");
@@ -28,6 +34,14 @@ test("rejects a signature that does not match the raw request body", () => {
 test("rejects missing and malformed webhook signatures", () => {
   assert.equal(verifyPaystackSignature(rawBody, undefined), false);
   assert.equal(verifyPaystackSignature(rawBody, "not-a-signature"), false);
+});
+
+test("distinguishes Inline readiness from server-side payment verification readiness", () => {
+  assert.equal(isPaystackSecretConfigured(), true);
+  assert.equal(isPaystackConfigured(), false);
+  process.env.PAYSTACK_PUBLIC_KEY = "pk_test_inline";
+  assert.equal(isPaystackConfigured(), true);
+  delete process.env.PAYSTACK_PUBLIC_KEY;
 });
 
 test("matches only the expected reference, NGN currency, and amount", () => {

@@ -14,7 +14,16 @@ function paystackSecret(): string | null {
 }
 
 export function isPaystackConfigured(): boolean {
+  return isPaystackSecretConfigured() && paystackPublicKey() !== null;
+}
+
+export function isPaystackSecretConfigured(): boolean {
   return paystackSecret() !== null;
+}
+
+export function paystackPublicKey(): string | null {
+  const key = process.env.PAYSTACK_PUBLIC_KEY?.trim();
+  return key || null;
 }
 
 export function verifyPaystackSignature(

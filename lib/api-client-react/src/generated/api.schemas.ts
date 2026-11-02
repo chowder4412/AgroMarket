@@ -230,27 +230,21 @@ export interface CheckoutResult {
   status: CheckoutResultStatus;
   /** @nullable */
   authorizationUrl: string | null;
+  accessCode: string;
+  reference: string;
   orders: Order[];
 }
-
-export type CheckoutInputPaymentMode = typeof CheckoutInputPaymentMode[keyof typeof CheckoutInputPaymentMode];
-
-
-export const CheckoutInputPaymentMode = {
-  sandbox: 'sandbox',
-  paystack: 'paystack',
-} as const;
 
 export interface CheckoutInput {
   /** @minLength 8 */
   deliveryAddress: string;
-  paymentMode: CheckoutInputPaymentMode;
-  email?: string;
+  email: string;
 }
 
 export interface PaymentMethods {
-  sandboxAvailable: boolean;
   paystackAvailable: boolean;
+  /** @nullable */
+  paystackPublicKey: string | null;
 }
 
 export interface PaystackVerificationInput {
@@ -276,6 +270,13 @@ export interface PaymentVerification {
   orderGroupNumber: string;
   grandTotal: number;
   orders: Order[];
+}
+
+export interface PaystackPaymentSession {
+  accessCode: string;
+  reference: string;
+  orderGroupNumber: string;
+  grandTotal: number;
 }
 
 export interface SellerDashboard {
@@ -421,14 +422,6 @@ export const QuotationResponseUpdateStatus = {
   declined: 'declined',
 } as const;
 
-export type QuotationResponseUpdatePaymentMode = typeof QuotationResponseUpdatePaymentMode[keyof typeof QuotationResponseUpdatePaymentMode];
-
-
-export const QuotationResponseUpdatePaymentMode = {
-  sandbox: 'sandbox',
-  paystack: 'paystack',
-} as const;
-
 export interface QuotationResponseUpdate {
   status: QuotationResponseUpdateStatus;
   /**
@@ -436,7 +429,6 @@ export interface QuotationResponseUpdate {
      * @maxLength 1000
      */
   deliveryAddress?: string;
-  paymentMode?: QuotationResponseUpdatePaymentMode;
   email?: string;
 }
 
@@ -480,6 +472,10 @@ export interface QuotationDecisionResult {
   status: QuotationDecisionResultStatus;
   /** @nullable */
   authorizationUrl: string | null;
+  /** @nullable */
+  accessCode: string | null;
+  /** @nullable */
+  reference: string | null;
   orders: Order[];
 }
 

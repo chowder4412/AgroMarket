@@ -17,5 +17,9 @@ export interface QuotationDecisionResult {
   status: QuotationDecisionResultStatus;
   /** @nullable */
   authorizationUrl: string | null;
+  /** @nullable */
+  accessCode: string | null;
+  /** @nullable */
+  reference: string | null;
   orders: Order[];
 }

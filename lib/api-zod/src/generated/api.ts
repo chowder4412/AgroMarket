@@ -334,7 +334,7 @@ export const RemoveCartItemResponse = zod.object({
 
 
 /**
- * @summary Validate stock and start sandbox or Paystack checkout
+ * @summary Validate stock and initialize inline Paystack checkout
  */
 export const checkoutBodyDeliveryAddressMin = 8;
 
@@ -342,8 +342,7 @@ export const checkoutBodyDeliveryAddressMin = 8;
 
 export const CheckoutBody = zod.object({
   "deliveryAddress": zod.string().min(checkoutBodyDeliveryAddressMin),
-  "paymentMode": zod.enum(['sandbox', 'paystack']),
-  "email": zod.string().email().optional()
+  "email": zod.string().email()
 })
 
 export const CheckoutResponse = zod.object({
@@ -351,6 +350,8 @@ export const CheckoutResponse = zod.object({
   "grandTotal": zod.number(),
   "status": zod.enum(['pending', 'paid', 'failed']),
   "authorizationUrl": zod.string().url().nullable(),
+  "accessCode": zod.string(),
+  "reference": zod.string(),
   "orders": zod.array(zod.object({
   "id": zod.number().int(),
   "orderNumber": zod.string(),
@@ -377,8 +378,8 @@ export const CheckoutResponse = zod.object({
  * @summary List checkout methods available in this environment
  */
 export const GetPaymentMethodsResponse = zod.object({
-  "sandboxAvailable": zod.boolean(),
-  "paystackAvailable": zod.boolean()
+  "paystackAvailable": zod.boolean(),
+  "paystackPublicKey": zod.string().nullable()
 })
 
 
@@ -451,6 +452,21 @@ export const ListOrdersResponseItem = zod.object({
 }))
 })
 export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
+
+
+/**
+ * @summary Resume an unpaid Paystack order from the signed-in buyer's account
+ */
+export const GetPaystackPaymentSessionParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetPaystackPaymentSessionResponse = zod.object({
+  "accessCode": zod.string(),
+  "reference": zod.string(),
+  "orderGroupNumber": zod.string(),
+  "grandTotal": zod.number()
+})
 
 
 /**
@@ -840,7 +856,7 @@ export const RespondToQuotationResponse = zod.object({
 
 
 /**
- * @summary Accept or decline a seller's quote response
+ * @summary Accept a quote into an order or decline the seller response
  */
 export const UpdateQuotationResponseParams = zod.object({
   "id": zod.coerce.number().int(),
@@ -855,7 +871,6 @@ export const updateQuotationResponseBodyDeliveryAddressMax = 1000;
 export const UpdateQuotationResponseBody = zod.object({
   "status": zod.enum(['accepted', 'declined']),
   "deliveryAddress": zod.string().min(updateQuotationResponseBodyDeliveryAddressMin).max(updateQuotationResponseBodyDeliveryAddressMax).optional(),
-  "paymentMode": zod.enum(['sandbox', 'paystack']).optional(),
   "email": zod.string().email().optional()
 })
 
@@ -897,6 +912,8 @@ export const UpdateQuotationResponseResponse = zod.object({
   "orderGroupNumber": zod.string().nullable(),
   "status": zod.union([zod.literal('pending'),zod.literal('paid'),zod.literal('failed'),zod.literal(null)]).nullable(),
   "authorizationUrl": zod.string().url().nullable(),
+  "accessCode": zod.string().nullable(),
+  "reference": zod.string().nullable(),
   "orders": zod.array(zod.object({
   "id": zod.number().int(),
   "orderNumber": zod.string(),

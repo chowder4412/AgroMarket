@@ -43,6 +43,7 @@ import type {
   OrderStatusUpdate,
   PaymentMethods,
   PaymentVerification,
+  PaystackPaymentSession,
   PaystackVerificationInput,
   Product,
   ProductInput,
@@ -1224,7 +1225,7 @@ export const getCheckoutUrl = () => {
 }
 
 /**
- * @summary Validate stock and start sandbox or Paystack checkout
+ * @summary Validate stock and initialize inline Paystack checkout
  */
 export const checkout = async (checkoutInput: CheckoutInput, options?: Parameters<typeof customFetch>[1]): Promise<CheckoutResult> => {
 
@@ -1290,7 +1291,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CheckoutMutationVariables = {data: BodyType<CheckoutInput>}
 
     /**
- * @summary Validate stock and start sandbox or Paystack checkout
+ * @summary Validate stock and initialize inline Paystack checkout
  */
 export const useCheckout = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkout>>, TError,CheckoutMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -1656,6 +1657,107 @@ export function useListOrders<TData = Awaited<ReturnType<typeof listOrders>>, TE
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getListOrdersQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetPaystackPaymentSessionUrl = (id: number,) => {
+
+
+
+
+  return `/api/orders/${id}/payment-session`
+}
+
+/**
+ * @summary Resume an unpaid Paystack order from the signed-in buyer's account
+ */
+export const getPaystackPaymentSession = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<PaystackPaymentSession> => {
+
+  return customFetch<PaystackPaymentSession>(getGetPaystackPaymentSessionUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPaystackPaymentSessionQueryKey = (id: number,) => {
+    return [
+    `/api/orders/${id}/payment-session`
+    ] as const;
+    }
+
+
+export const getGetPaystackPaymentSessionQueryOptions = <TData = Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError = ErrorType<void>>(id: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPaystackPaymentSessionQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPaystackPaymentSession>>> = ({ signal }) => getPaystackPaymentSession(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetPaystackPaymentSessionQueryResult = NonNullable<Awaited<ReturnType<typeof getPaystackPaymentSession>>>
+export type GetPaystackPaymentSessionQueryError = ErrorType<void>
+
+
+export function useGetPaystackPaymentSession<TData = Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError = ErrorType<void>>(
+ id: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPaystackPaymentSession>>,
+          TError,
+          Awaited<ReturnType<typeof getPaystackPaymentSession>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPaystackPaymentSession<TData = Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPaystackPaymentSession>>,
+          TError,
+          Awaited<ReturnType<typeof getPaystackPaymentSession>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPaystackPaymentSession<TData = Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Resume an unpaid Paystack order from the signed-in buyer's account
+ */
+
+export function useGetPaystackPaymentSession<TData = Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPaystackPaymentSession>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetPaystackPaymentSessionQueryOptions(id,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -2918,7 +3020,7 @@ export const getUpdateQuotationResponseUrl = (id: number,
 }
 
 /**
- * @summary Accept or decline a seller's quote response
+ * @summary Accept a quote into an order or decline the seller response
  */
 export const updateQuotationResponse = async (id: number,
     responseId: number,
@@ -2986,7 +3088,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type UpdateQuotationResponseMutationVariables = {id: number;responseId: number;data: BodyType<QuotationResponseUpdate>}
 
     /**
- * @summary Accept or decline a seller's quote response
+ * @summary Accept a quote into an order or decline the seller response
  */
 export const useUpdateQuotationResponse = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateQuotationResponse>>, TError,UpdateQuotationResponseMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}

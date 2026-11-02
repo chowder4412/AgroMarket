@@ -7,6 +7,7 @@
  */
 
 export interface PaymentMethods {
-  sandboxAvailable: boolean;
   paystackAvailable: boolean;
+  /** @nullable */
+  paystackPublicKey: string | null;
 }

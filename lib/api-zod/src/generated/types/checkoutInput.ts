@@ -5,11 +5,9 @@
  * AgroMarket Nigeria marketplace API
  * OpenAPI spec version: 0.1.0
  */
-import type { CheckoutInputPaymentMode } from './checkoutInputPaymentMode';
 
 export interface CheckoutInput {
   /** @minLength 8 */
   deliveryAddress: string;
-  paymentMode: CheckoutInputPaymentMode;
-  email?: string;
+  email: string;
 }

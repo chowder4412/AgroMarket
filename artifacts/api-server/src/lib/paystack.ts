@@ -12,14 +12,18 @@ import {
 } from "@workspace/db";
 import {
   isPaystackConfigured,
+  isPaystackSecretConfigured,
   matchesExpectedPayment,
+  paystackPublicKey,
   verifyPaystackSignature,
   type PaystackTransaction,
 } from "./paystack-security";
 
 export {
   isPaystackConfigured,
+  isPaystackSecretConfigured,
   matchesExpectedPayment,
+  paystackPublicKey,
   verifyPaystackSignature,
 } from "./paystack-security";
 export type { PaystackTransaction } from "./paystack-security";
@@ -47,7 +51,7 @@ export async function initializePaystackTransaction(input: {
   amountNgn: number;
   reference: string;
   orderGroupNumber: string;
-}): Promise<{ authorizationUrl: string; reference: string }> {
+}): Promise<{ authorizationUrl: string; accessCode: string; reference: string }> {
   const secret = paystackSecret();
   if (!secret) throw new Error("Paystack is not configured.");
   const amountKobo = input.amountNgn * 100;
@@ -55,7 +59,6 @@ export async function initializePaystackTransaction(input: {
     throw new Error("The checkout total is outside the supported range.");
   }
 
-  const callbackUrl = process.env.PAYSTACK_CALLBACK_URL?.trim();
   const response = await fetch(`${PAYSTACK_API}/transaction/initialize`, {
     method: "POST",
     headers: {
@@ -67,7 +70,6 @@ export async function initializePaystackTransaction(input: {
       amount: String(amountKobo),
       currency: "NGN",
       reference: input.reference,
-      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
       metadata: JSON.stringify({ orderGroupNumber: input.orderGroupNumber }),
     }),
     signal: AbortSignal.timeout(12_000),
@@ -75,15 +77,18 @@ export async function initializePaystackTransaction(input: {
   const payload = await parseProviderResponse(response);
   const data = payload.data as Record<string, unknown> | undefined;
   const authorizationUrl = data?.authorization_url;
+  const accessCode = data?.access_code;
   const reference = data?.reference;
   if (
     typeof authorizationUrl !== "string" ||
     !authorizationUrl.startsWith("https://checkout.paystack.com/") ||
+    typeof accessCode !== "string" ||
+    !accessCode ||
     reference !== input.reference
   ) {
     throw new Error("Paystack returned an invalid checkout response.");
   }
-  return { authorizationUrl, reference };
+  return { authorizationUrl, accessCode, reference };
 }
 
 export async function verifyPaystackTransaction(

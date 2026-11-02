@@ -363,17 +363,16 @@ router.patch(
     }
     if (parsed.data.status === "accepted") {
       const deliveryAddress = parsed.data.deliveryAddress?.trim();
-      const paymentMode = parsed.data.paymentMode;
       const email = parsed.data.email?.trim();
-      if (!deliveryAddress || !paymentMode) {
-        res.status(400).json({ error: "Delivery address and payment method are required to accept a quote." });
+      if (!deliveryAddress) {
+        res.status(400).json({ error: "A delivery address is required to accept a quote." });
         return;
       }
-      if (paymentMode === "paystack" && !email) {
+      if (!email) {
         res.status(400).json({ error: "An email address is required for Paystack checkout." });
         return;
       }
-      if (paymentMode === "paystack" && !isPaystackConfigured()) {
+      if (!isPaystackConfigured()) {
         res.status(503).json({ error: "Paystack is not configured." });
         return;
       }
@@ -448,11 +447,7 @@ router.patch(
             if (!requested) throw new Error("Quoted order items no longer match the request.");
             const [inventory] = await tx
               .update(inventoryTable)
-              .set(
-                paymentMode === "paystack"
-                  ? { reserved: sql`${inventoryTable.reserved} + ${item.quantity}` }
-                  : { quantity: sql`${inventoryTable.quantity} - ${item.quantity}` },
-              )
+                .set({ reserved: sql`${inventoryTable.reserved} + ${item.quantity}` })
               .where(
                 and(
                   eq(inventoryTable.productId, requested.productId),
@@ -470,9 +465,9 @@ router.patch(
               orderGroupNumber: groupNumber,
               sellerId: lockedResponse.sellerId,
               buyerId: req.marketplaceUserId!,
-              status: paymentMode === "sandbox" ? "paid" : "pending_payment",
-              paymentStatus: paymentMode === "sandbox" ? "paid" : "pending",
-              paymentMode: paymentMode === "sandbox" ? "sandbox" : "provider_pending",
+              status: "pending_payment",
+              paymentStatus: "pending",
+              paymentMode: "provider_pending",
               totalNgn: pricing.totalNgn,
               deliveryAddress,
             })
@@ -495,23 +490,21 @@ router.patch(
           );
           await tx.insert(paymentsTable).values({
             orderId: createdOrder.id,
-            provider: paymentMode === "sandbox" ? "sandbox" : "paystack",
-            status: paymentMode === "sandbox" ? "paid" : "pending",
+            provider: "paystack",
+            status: "pending",
             amountNgn: pricing.totalNgn,
-            providerReference: paymentMode === "sandbox" ? groupNumber : `${reference}-01`,
+            providerReference: `${reference}-01`,
           });
-          if (paymentMode === "paystack") {
-            await tx.insert(checkoutPaymentsTable).values({
-              orderGroupNumber: groupNumber,
-              buyerId: req.marketplaceUserId!,
-              provider: "paystack",
-              status: "pending",
-              amountNgn: pricing.totalNgn,
-              providerReference: reference,
-              quotationResponseId: lockedResponse.id,
-              expiresAt: new Date(Date.now() + 15 * 60_000),
-            });
-          }
+          await tx.insert(checkoutPaymentsTable).values({
+            orderGroupNumber: groupNumber,
+            buyerId: req.marketplaceUserId!,
+            provider: "paystack",
+            status: "pending",
+            amountNgn: pricing.totalNgn,
+            providerReference: reference,
+            quotationResponseId: lockedResponse.id,
+            expiresAt: new Date(Date.now() + 15 * 60_000),
+          });
           await tx
             .update(quotationResponsesTable)
             .set({ status: "accepted", updatedAt: new Date() })
@@ -549,33 +542,34 @@ router.patch(
       }
 
       let authorizationUrl: string | null = null;
-      if (paymentMode === "paystack") {
-        try {
-          const initialized = await initializePaystackTransaction({
-            email: email!,
-            amountNgn: acceptedOrder.totalNgn,
-            reference,
-            orderGroupNumber: groupNumber,
-          });
-          authorizationUrl = initialized.authorizationUrl;
-          await db
-            .update(checkoutPaymentsTable)
-            .set({ authorizationUrl })
-            .where(eq(checkoutPaymentsTable.providerReference, reference));
-        } catch {
-          await markPaystackPaymentFailed(reference, `initialize-failed:${groupNumber}`);
-          res.status(502).json({ error: "Paystack could not start this payment. The order was cancelled and reserved stock released." });
-          return;
-        }
+      let accessCode: string;
+      try {
+        const initialized = await initializePaystackTransaction({
+          email,
+          amountNgn: acceptedOrder.totalNgn,
+          reference,
+          orderGroupNumber: groupNumber,
+        });
+        authorizationUrl = initialized.authorizationUrl;
+        accessCode = initialized.accessCode;
+        await db
+          .update(checkoutPaymentsTable)
+          .set({ authorizationUrl, accessCode })
+          .where(eq(checkoutPaymentsTable.providerReference, reference));
+      } catch {
+        await markPaystackPaymentFailed(reference, `initialize-failed:${groupNumber}`);
+        res.status(502).json({ error: "Paystack could not start this payment. The order was cancelled and reserved stock released." });
+        return;
       }
       const updatedQuotation = await quotationPayload(quotation.id);
       const order = await orderPayload(acceptedOrder.id);
       res.json(
         UpdateQuotationResponseResponse.parse({
-          quotation: updatedQuotation,
           orderGroupNumber: groupNumber,
-          status: paymentMode === "sandbox" ? "paid" : "pending",
+          status: "pending",
           authorizationUrl,
+          accessCode,
+          reference,
           orders: order ? [order] : [],
         }),
       );
@@ -617,6 +611,8 @@ router.patch(
         orderGroupNumber: null,
         status: null,
         authorizationUrl: null,
+        accessCode: null,
+        reference: null,
         orders: [],
       }),
     );

@@ -1,0 +1,1 @@
+ALTER TABLE "checkout_payments" ADD COLUMN "access_code" text;

@@ -135,6 +135,7 @@ export const checkoutPaymentsTable = pgTable("checkout_payments", {
   providerReference: varchar("provider_reference", { length: 160 })
     .notNull()
     .unique(),
+  accessCode: text("access_code"),
   quotationResponseId: integer("quotation_response_id").references(
     () => quotationResponsesTable.id,
     { onDelete: "set null" },

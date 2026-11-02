@@ -16,7 +16,7 @@ AgroMarket Nigeria connects consumers and business buyers with verified local fa
 - `pnpm --filter @workspace/db run push` — development-only schema synchronization. The checked-in `0000` migration is a fresh-database baseline; do not apply it to an existing database without first reconciling its schema and migration history.
 - `node --experimental-strip-types --test artifacts/api-server/src/lib/paystack-security.test.mjs` — run payment security and dispute state-machine tests (Node.js 24+).
 - Required services: PostgreSQL (`DATABASE_URL`) and Clerk Auth (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and `VITE_CLERK_PUBLISHABLE_KEY`).
-- Optional Paystack: configure `PAYSTACK_SECRET_KEY`, a public `PAYSTACK_CALLBACK_URL`, and the `/api/payments/paystack/webhook` endpoint in the Paystack dashboard. Use test credentials before launch.
+- Required for checkout: configure `PAYSTACK_SECRET_KEY` and `PAYSTACK_PUBLIC_KEY`, then register `/api/payments/paystack/webhook` in the Paystack dashboard. Use test credentials during integration testing.
 
 ## Stack
 
@@ -44,13 +44,13 @@ AgroMarket Nigeria connects consumers and business buyers with verified local fa
 - Persist app roles in PostgreSQL and enforce them in API middleware; users cannot self-assign admin.
 - Store NGN prices as whole naira integers. Checkout splits a multi-seller cart into seller-specific orders and updates stock atomically.
 - Supplier quotes contain server-validated per-line prices. Accepting a quote creates a seller order; Paystack stock remains reserved until provider confirmation, and failed/expired payments release stock and reopen the quote.
-- Checkout is explicitly sandbox-only and creates a simulated paid order without charging money.
+- New checkouts use Paystack Inline; card details stay inside Paystack's hosted popup and are never handled by the marketplace server.
 
 ## Product
 
 - Public product catalogue with category, location, search, price sorting, verified-farm spotlights, unit prices, minimum quantities, and wholesale tiers.
 - Clerk sign-in with consumer, farmer, supplier, and business-buyer role onboarding; admin is a controlled role.
-- Persistent carts, stock-checked sandbox checkout, buyer order history, seller listing/dashboard/fulfilment tools, bulk quotation requests, and seller verification review.
+- Persistent carts, Paystack checkout with stock reservation, buyer order history, seller listing/dashboard/fulfilment tools, bulk quotation-to-order flow, and seller verification review.
 - Seed listings are demo data for Lagos and Ogun. Replace them with real seller inventory before a pilot.
 
 ## User preferences

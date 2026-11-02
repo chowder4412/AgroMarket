@@ -14,5 +14,7 @@ export interface CheckoutResult {
   status: CheckoutResultStatus;
   /** @nullable */
   authorizationUrl: string | null;
+  accessCode: string;
+  reference: string;
   orders: Order[];
 }

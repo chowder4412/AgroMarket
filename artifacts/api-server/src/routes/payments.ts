@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   checkoutPaymentsTable,
   db,
@@ -7,15 +7,19 @@ import {
 } from "@workspace/db";
 import {
   GetPaymentMethodsResponse,
+  GetPaystackPaymentSessionParams,
+  GetPaystackPaymentSessionResponse,
   VerifyPaystackPaymentBody,
   VerifyPaystackPaymentResponse,
 } from "@workspace/api-zod";
 import { requireAuth } from "../middlewares/auth";
 import {
   isPaystackConfigured,
+  isPaystackSecretConfigured,
   markPaystackPaymentFailed,
   markPaystackPaymentPaid,
   matchesExpectedPayment,
+  paystackPublicKey,
   verifyPaystackSignature,
   verifyPaystackTransaction,
 } from "../lib/paystack";
@@ -26,11 +30,67 @@ const router: IRouter = Router();
 router.get("/payments/methods", (_req, res): void => {
   res.json(
     GetPaymentMethodsResponse.parse({
-      sandboxAvailable: true,
       paystackAvailable: isPaystackConfigured(),
+      paystackPublicKey: paystackPublicKey(),
     }),
   );
 });
+
+router.get(
+  "/orders/:id/payment-session",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const params = GetPaystackPaymentSessionParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    const [order] = await db
+      .select({ id: ordersTable.id, group: ordersTable.orderGroupNumber })
+      .from(ordersTable)
+      .where(
+        and(
+          eq(ordersTable.id, params.data.id),
+          eq(ordersTable.buyerId, req.marketplaceUserId!),
+          eq(ordersTable.paymentStatus, "pending"),
+          eq(ordersTable.paymentMode, "provider_pending"),
+        ),
+      )
+      .limit(1);
+    if (!order?.group) {
+      res.status(404).json({ error: "Pending Paystack order not found." });
+      return;
+    }
+    const [session] = await db
+      .select()
+      .from(checkoutPaymentsTable)
+      .where(
+        and(
+          eq(checkoutPaymentsTable.orderGroupNumber, order.group),
+          eq(checkoutPaymentsTable.buyerId, req.marketplaceUserId!),
+          eq(checkoutPaymentsTable.provider, "paystack"),
+          eq(checkoutPaymentsTable.status, "pending"),
+        ),
+      )
+      .limit(1);
+    if (!session) {
+      res.status(404).json({ error: "Pending Paystack session not found." });
+      return;
+    }
+    if (session.expiresAt <= new Date() || !session.accessCode) {
+      res.status(409).json({ error: "Paystack session expired or is not ready to resume." });
+      return;
+    }
+    res.json(
+      GetPaystackPaymentSessionResponse.parse({
+        accessCode: session.accessCode,
+        reference: session.providerReference,
+        orderGroupNumber: session.orderGroupNumber,
+        grandTotal: session.amountNgn,
+      }),
+    );
+  },
+);
 
 router.post(
   "/payments/paystack/verify",
@@ -41,7 +101,7 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    if (!isPaystackConfigured()) {
+    if (!isPaystackSecretConfigured()) {
       res.status(503).json({ error: "Paystack is not configured." });
       return;
     }
@@ -95,7 +155,7 @@ router.post(
 );
 
 router.post("/payments/paystack/webhook", async (req, res): Promise<void> => {
-  if (!isPaystackConfigured()) {
+  if (!isPaystackSecretConfigured()) {
     res.status(503).json({ error: "Paystack is not configured." });
     return;
   }

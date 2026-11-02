@@ -5,7 +5,6 @@
  * AgroMarket Nigeria marketplace API
  * OpenAPI spec version: 0.1.0
  */
-import type { QuotationResponseUpdatePaymentMode } from './quotationResponseUpdatePaymentMode';
 import type { QuotationResponseUpdateStatus } from './quotationResponseUpdateStatus';
 
 export interface QuotationResponseUpdate {
@@ -15,6 +14,5 @@ export interface QuotationResponseUpdate {
      * @maxLength 1000
      */
   deliveryAddress?: string;
-  paymentMode?: QuotationResponseUpdatePaymentMode;
   email?: string;
 }

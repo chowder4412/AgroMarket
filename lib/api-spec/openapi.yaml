@@ -229,7 +229,7 @@ paths:
     post:
       operationId: checkout
       tags: [orders]
-      summary: Validate stock and start sandbox or Paystack checkout
+      summary: Validate stock and initialize inline Paystack checkout
       requestBody:
         required: true
         content:
@@ -294,6 +294,24 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Order" }
+  /orders/{id}/payment-session:
+    get:
+      operationId: getPaystackPaymentSession
+      tags: [payments, orders]
+      summary: Resume an unpaid Paystack order from the signed-in buyer's account
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Inline access code for the pending Paystack checkout
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaystackPaymentSession" }
+        "404": { description: Pending payment not found for this buyer }
+        "409": { description: Payment session is unavailable or expired }
   /orders/disputes:
     get:
       operationId: listBuyerDisputes
@@ -707,23 +725,24 @@ components:
         grandTotal: { type: number }
         status: { type: string, enum: [pending, paid, failed] }
         authorizationUrl: { type: [string, "null"], format: uri }
+        accessCode: { type: string }
+        reference: { type: string }
         orders:
           type: array
           items: { $ref: "#/components/schemas/Order" }
-      required: [orderGroupNumber, grandTotal, status, authorizationUrl, orders]
+      required: [orderGroupNumber, grandTotal, status, authorizationUrl, accessCode, reference, orders]
     CheckoutInput:
       type: object
       properties:
         deliveryAddress: { type: string, minLength: 8 }
-        paymentMode: { type: string, enum: [sandbox, paystack] }
         email: { type: string, format: email }
-      required: [deliveryAddress, paymentMode]
+      required: [deliveryAddress, email]
     PaymentMethods:
       type: object
       properties:
-        sandboxAvailable: { type: boolean }
         paystackAvailable: { type: boolean }
-      required: [sandboxAvailable, paystackAvailable]
+        paystackPublicKey: { type: [string, "null"] }
+      required: [paystackAvailable, paystackPublicKey]
     PaystackVerificationInput:
       type: object
       properties:
@@ -740,6 +759,14 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Order" }
       required: [reference, status, orderGroupNumber, grandTotal, orders]
+    PaystackPaymentSession:
+      type: object
+      properties:
+        accessCode: { type: string }
+        reference: { type: string }
+        orderGroupNumber: { type: string }
+        grandTotal: { type: number }
+      required: [accessCode, reference, orderGroupNumber, grandTotal]
     SellerDashboard:
       type: object
       properties:
@@ -853,7 +880,6 @@ components:
       properties:
         status: { type: string, enum: [accepted, declined] }
         deliveryAddress: { type: string, minLength: 8, maxLength: 1000 }
-        paymentMode: { type: string, enum: [sandbox, paystack] }
         email: { type: string, format: email }
       required: [status]
     QuotationDecisionResult:
@@ -863,10 +889,12 @@ components:
         orderGroupNumber: { type: [string, "null"] }
         status: { type: [string, "null"], enum: [pending, paid, failed, null] }
         authorizationUrl: { type: [string, "null"], format: uri }
+        accessCode: { type: [string, "null"] }
+        reference: { type: [string, "null"] }
         orders:
           type: array
           items: { $ref: "#/components/schemas/Order" }
-      required: [quotation, orderGroupNumber, status, authorizationUrl, orders]
+      required: [quotation, orderGroupNumber, status, authorizationUrl, accessCode, reference, orders]
     Quotation:
       type: object
       properties:
