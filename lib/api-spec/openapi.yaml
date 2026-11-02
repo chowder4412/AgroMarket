@@ -509,7 +509,7 @@ paths:
     patch:
       operationId: updateQuotationResponse
       tags: [quotations]
-      summary: Accept or decline a seller's quote response
+      summary: Accept a quote into an order or decline the seller response
       parameters:
         - in: path
           name: id
@@ -526,10 +526,10 @@ paths:
             schema: { $ref: "#/components/schemas/QuotationResponseUpdate" }
       responses:
         "200":
-          description: Seller response decision saved
+          description: Seller response decision and any resulting checkout
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Quotation" }
+              schema: { $ref: "#/components/schemas/QuotationDecisionResult" }
 components:
   schemas:
     HealthStatus:
@@ -821,19 +821,52 @@ components:
         totalNgn: { type: [integer, "null"] }
         message: { type: string }
         createdAt: { type: string, format: date-time }
-      required: [id, sellerName, status, totalNgn, message, createdAt]
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/QuotationResponseItem" }
+      required: [id, sellerName, status, totalNgn, message, createdAt, items]
+    QuotationResponseItem:
+      type: object
+      properties:
+        quotationItemId: { type: integer }
+        unitPriceNgn: { type: integer, minimum: 1 }
+        quantity: { type: integer }
+        name: { type: string }
+        unit: { $ref: "#/components/schemas/ProductUnit" }
+      required: [quotationItemId, unitPriceNgn, quantity, name, unit]
     QuotationResponseInput:
       type: object
       properties:
         status: { type: string, enum: [quoted, declined] }
-        totalNgn: { type: integer, minimum: 1 }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              quotationItemId: { type: integer }
+              unitPriceNgn: { type: integer, minimum: 1 }
+            required: [quotationItemId, unitPriceNgn]
         message: { type: string, maxLength: 1000 }
       required: [status, message]
     QuotationResponseUpdate:
       type: object
       properties:
         status: { type: string, enum: [accepted, declined] }
+        deliveryAddress: { type: string, minLength: 8, maxLength: 1000 }
+        paymentMode: { type: string, enum: [sandbox, paystack] }
+        email: { type: string, format: email }
       required: [status]
+    QuotationDecisionResult:
+      type: object
+      properties:
+        quotation: { $ref: "#/components/schemas/Quotation" }
+        orderGroupNumber: { type: [string, "null"] }
+        status: { type: [string, "null"], enum: [pending, paid, failed, null] }
+        authorizationUrl: { type: [string, "null"], format: uri }
+        orders:
+          type: array
+          items: { $ref: "#/components/schemas/Order" }
+      required: [quotation, orderGroupNumber, status, authorizationUrl, orders]
     Quotation:
       type: object
       properties:

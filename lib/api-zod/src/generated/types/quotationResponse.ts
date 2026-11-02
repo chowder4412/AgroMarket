@@ -5,6 +5,7 @@
  * AgroMarket Nigeria marketplace API
  * OpenAPI spec version: 0.1.0
  */
+import type { QuotationResponseItem } from './quotationResponseItem';
 import type { QuotationResponseStatus } from './quotationResponseStatus';
 
 export interface QuotationResponse {
@@ -15,4 +16,5 @@ export interface QuotationResponse {
   totalNgn: number | null;
   message: string;
   createdAt: Date;
+  items: QuotationResponseItem[];
 }

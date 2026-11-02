@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { productUnitEnum, productsTable } from "./catalog";
 import { sellerProfilesTable, usersTable } from "./identity";
+import { quotationResponsesTable } from "./quotations";
 
 export const orderStatusEnum = pgEnum("order_status", [
   "pending_payment",
@@ -134,6 +135,10 @@ export const checkoutPaymentsTable = pgTable("checkout_payments", {
   providerReference: varchar("provider_reference", { length: 160 })
     .notNull()
     .unique(),
+  quotationResponseId: integer("quotation_response_id").references(
+    () => quotationResponsesTable.id,
+    { onDelete: "set null" },
+  ),
   authorizationUrl: text("authorization_url"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   paidAt: timestamp("paid_at", { withTimezone: true }),

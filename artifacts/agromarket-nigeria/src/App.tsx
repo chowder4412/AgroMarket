@@ -495,10 +495,10 @@ function SellerQuotationsPage() {
   const quotes = useListSellerQuotations({ query: { queryKey: getListSellerQuotationsQueryKey(), retry: false } });
   const respond = useRespondToQuotation();
   const client = useQueryClient();
-  const [totals, setTotals] = useState<Record<number, string>>({});
+  const [unitPrices, setUnitPrices] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<Record<number, string>>({});
-  const saveResponse = (id: number, status: 'quoted' | 'declined') => {
-    respond.mutate({ id, data: { status, message: messages[id] || '', ...(status === 'quoted' ? { totalNgn: Number(totals[id]) } : {}) } }, {
+  const saveResponse = (id: number, status: 'quoted' | 'declined', items: { quotationItemId: number; unitPriceNgn: number }[] = []) => {
+    respond.mutate({ id, data: { status, message: messages[id] || '', ...(status === 'quoted' ? { items } : {}) } }, {
       onSuccess: () => client.invalidateQueries({ queryKey: getListSellerQuotationsQueryKey() }),
     });
   };
@@ -512,11 +512,20 @@ function SellerQuotationsPage() {
           <div className="mt-4 divide-y divide-border rounded-xl border border-border">{quote.items.map((item) => <div key={item.quotationItemId} className="flex flex-wrap justify-between gap-2 px-3 py-2 text-sm"><span>{item.name} · {item.quantity} {item.unit}</span><span className="text-muted-foreground">Listed {money(item.unitPrice)}/{item.unit}</span></div>)}</div>
           {response?.status === 'quoted' && <p className="mt-3 text-sm">Your quote: <strong>{response.totalNgn === null ? 'Awaiting price' : money(response.totalNgn)}</strong>{response.message && <span className="text-muted-foreground"> · {response.message}</span>}</p>}
         </div>
-        {!closed && response?.status !== 'accepted' && <form onSubmit={(event) => { event.preventDefault(); saveResponse(quote.id, 'quoted'); }} className="space-y-3 rounded-xl bg-secondary/40 p-4">
-          <Field label="Your total for these items (₦)" value={totals[quote.id] ?? (response?.totalNgn ? String(response.totalNgn) : '')} onChange={(value) => setTotals((current) => ({ ...current, [quote.id]: value }))} type="number" min="1" required testId={`input-quotation-total-${quote.id}`} />
+        {!closed && response?.status !== 'accepted' && <form onSubmit={(event) => {
+          event.preventDefault();
+          const items = quote.items.map((item) => ({ quotationItemId: item.quotationItemId, unitPriceNgn: Number(unitPrices[`${quote.id}:${item.quotationItemId}`] ?? response?.items.find((line) => line.quotationItemId === item.quotationItemId)?.unitPriceNgn) }));
+          if (items.every((item) => Number.isSafeInteger(item.unitPriceNgn) && item.unitPriceNgn > 0)) saveResponse(quote.id, 'quoted', items);
+        }} className="space-y-3 rounded-xl bg-secondary/40 p-4">
+          <div className="space-y-2">{quote.items.map((item) => {
+            const existingPrice = response?.items.find((line) => line.quotationItemId === item.quotationItemId)?.unitPriceNgn;
+            const key = `${quote.id}:${item.quotationItemId}`;
+            return <Field key={item.quotationItemId} label={`${item.name} · ₦/${item.unit}`} value={unitPrices[key] ?? (existingPrice ? String(existingPrice) : '')} onChange={(value) => setUnitPrices((current) => ({ ...current, [key]: value }))} type="number" min="1" required testId={`input-quotation-line-price-${item.quotationItemId}`} />;
+          })}</div>
           <label className="block"><span className="mb-2 block text-sm font-bold">Message to buyer</span><textarea rows={3} value={messages[quote.id] ?? response?.message ?? ''} onChange={(event) => setMessages((current) => ({ ...current, [quote.id]: event.target.value }))} maxLength={1000} className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" data-testid={`input-quotation-message-${quote.id}`} /></label>
+          <p className="text-sm font-bold">Calculated total: {money(quote.items.reduce((sum, item) => sum + item.quantity * Number(unitPrices[`${quote.id}:${item.quotationItemId}`] ?? response?.items.find((line) => line.quotationItemId === item.quotationItemId)?.unitPriceNgn ?? 0), 0))}</p>
           {respond.isError && <Notice>We couldn't save that quote. Please try again.</Notice>}
-          <div className="flex gap-2"><Button type="submit" disabled={respond.isPending || !Number(totals[quote.id] ?? response?.totalNgn)} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-submit-quotation-${quote.id}`}>Send quote</Button><Button type="button" onClick={() => saveResponse(quote.id, 'declined')} disabled={respond.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-quotation-${quote.id}`}>Decline</Button></div>
+          <div className="flex gap-2"><Button type="submit" disabled={respond.isPending || quote.items.some((item) => !Number(unitPrices[`${quote.id}:${item.quotationItemId}`] ?? response?.items.find((line) => line.quotationItemId === item.quotationItemId)?.unitPriceNgn))} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-submit-quotation-${quote.id}`}>Send quote</Button><Button type="button" onClick={() => saveResponse(quote.id, 'declined')} disabled={respond.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-quotation-${quote.id}`}>Decline</Button></div>
         </form>}
       </article>;
     })}</div>}
@@ -525,17 +534,55 @@ function SellerQuotationsPage() {
 
 function BuyerQuotationResponsesPage() {
   const quotes = useListQuotations({ query: { queryKey: getListQuotationsQueryKey(), retry: false } });
+  const methods = useGetPaymentMethods({ query: { queryKey: getGetPaymentMethodsQueryKey(), retry: false } });
+  const { user } = useUser();
   const update = useUpdateQuotationResponse();
   const client = useQueryClient();
-  const decide = (id: number, responseId: number, status: 'accepted' | 'declined') => update.mutate({ id, responseId, data: { status } }, {
-    onSuccess: () => client.invalidateQueries({ queryKey: getListQuotationsQueryKey() }),
-  });
+  const [checkoutInputs, setCheckoutInputs] = useState<Record<number, { deliveryAddress: string; paymentMode: CheckoutInput['paymentMode']; email: string }>>({});
+  const [completedGroups, setCompletedGroups] = useState<Record<number, string>>({});
+  const checkoutFor = (id: number) => checkoutInputs[id] ?? {
+    deliveryAddress: '',
+    paymentMode: methods.data?.paystackAvailable ? 'paystack' as const : 'sandbox' as const,
+    email: user?.primaryEmailAddress?.emailAddress || '',
+  };
+  const decide = (id: number, responseId: number, status: 'accepted' | 'declined') => {
+    const checkout = checkoutFor(id);
+    update.mutate({ id, responseId, data: {
+      status,
+      ...(status === 'accepted' ? {
+        deliveryAddress: checkout.deliveryAddress,
+        paymentMode: checkout.paymentMode,
+        ...(checkout.paymentMode === 'paystack' ? { email: checkout.email } : {}),
+      } : {}),
+    } }, {
+      onSuccess: (result) => {
+        client.invalidateQueries({ queryKey: getListQuotationsQueryKey() });
+        client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+        client.invalidateQueries({ queryKey: getGetCartQueryKey() });
+        if (result.authorizationUrl) {
+          window.location.assign(result.authorizationUrl);
+        } else if (result.status === 'paid' && result.orderGroupNumber) {
+          setCompletedGroups((current) => ({ ...current, [id]: result.orderGroupNumber! }));
+        }
+      },
+    });
+  };
   return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Business buying" title="Supplier responses" description="Compare supplier totals and record which offer you want to proceed with." action={<Link href="/business/quotations" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary"><ArrowLeft size={16} />Back to requests</Link>} />
-    {quotes.isLoading ? <Skeleton className="h-40" /> : quotes.isError ? <Notice>Sign in as a business buyer to view supplier responses. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !quotes.data?.length ? <p className="text-sm text-muted-foreground">Send a request to receive supplier responses.</p> : <div className="space-y-4">{quotes.data.map((quote) => <article key={quote.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-buyer-quotation-${quote.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="serif text-2xl">{quote.businessName}</h2><p className="mt-1 text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(quote.status)}</span></div>
-      <div className="mt-4 space-y-3">{quote.responses.length ? quote.responses.map((response) => <div key={response.id} className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 sm:flex-row sm:items-center" data-testid={`card-quotation-response-${response.id}`}><div className="min-w-0 flex-1"><p className="font-bold">{response.sellerName}</p><p className="mt-1 text-sm">{response.totalNgn === null ? 'Declined' : money(response.totalNgn)}</p>{response.message && <p className="mt-1 text-sm text-muted-foreground">{response.message}</p>}</div><span className="w-fit rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response.status)}</span>{response.status === 'quoted' && quote.status !== 'accepted' && quote.status !== 'declined' && <div className="flex gap-2"><Button onClick={() => decide(quote.id, response.id, 'accepted')} disabled={update.isPending} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-accept-quotation-${response.id}`}>Accept</Button><Button onClick={() => decide(quote.id, response.id, 'declined')} disabled={update.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-response-${response.id}`}>Decline</Button></div>}</div>) : <p className="rounded-xl bg-secondary/40 p-4 text-sm text-muted-foreground">No suppliers have responded yet.</p>}</div>
-      {update.isError && <div className="mt-3"><Notice>We couldn't save that decision. Please try again.</Notice></div>}
-      {quote.status === 'accepted' && <p className="mt-4 rounded-xl bg-[#fff5e5] p-4 text-sm text-[#644b2d]">Your selection is recorded. Confirm delivery terms with the supplier before placing a separate order.</p>}
-    </article>)}</div>}
+    {methods.isError && <Notice>Payment options could not be loaded. Sandbox remains available.</Notice>}
+    {quotes.isLoading ? <Skeleton className="h-40" /> : quotes.isError ? <Notice>Sign in as a business buyer to view supplier responses. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !quotes.data?.length ? <p className="text-sm text-muted-foreground">Send a request to receive supplier responses.</p> : <div className="space-y-4">{quotes.data.map((quote) => {
+      const checkout = checkoutFor(quote.id);
+      const openResponses = quote.responses.some((response) => response.status === 'quoted') && quote.status !== 'accepted' && quote.status !== 'declined';
+      const canPay = checkout.paymentMode !== 'paystack' || (!!methods.data?.paystackAvailable && !!checkout.email.trim());
+      return <article key={quote.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-buyer-quotation-${quote.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="serif text-2xl">{quote.businessName}</h2><p className="mt-1 text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(quote.status)}</span></div>
+        <div className="mt-4 space-y-3">{quote.responses.length ? quote.responses.map((response) => <div key={response.id} className="rounded-xl border border-border bg-background p-4" data-testid={`card-quotation-response-${response.id}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="font-bold">{response.sellerName}</p><p className="mt-1 text-lg font-bold">{response.totalNgn === null ? 'Declined' : money(response.totalNgn)}</p>{response.message && <p className="mt-1 text-sm text-muted-foreground">{response.message}</p>}</div><span className="w-fit rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response.status)}</span>{response.status === 'quoted' && openResponses && <div className="flex gap-2"><Button onClick={() => decide(quote.id, response.id, 'accepted')} disabled={update.isPending || checkout.deliveryAddress.trim().length < 8 || !canPay} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-accept-quotation-${response.id}`}>Accept & create order</Button><Button onClick={() => decide(quote.id, response.id, 'declined')} disabled={update.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-response-${response.id}`}>Decline</Button></div>}</div>
+          {!!response.items.length && <div className="mt-3 divide-y divide-border rounded-lg border border-border">{response.items.map((item) => <div key={item.quotationItemId} className="flex justify-between gap-3 px-3 py-2 text-sm"><span>{item.quantity} × {item.name} · {money(item.unitPriceNgn)}/{item.unit}</span><span className="font-semibold">{money(item.quantity * item.unitPriceNgn)}</span></div>)}</div>}
+        </div>) : <p className="rounded-xl bg-secondary/40 p-4 text-sm text-muted-foreground">No suppliers have responded yet.</p>}</div>
+        {openResponses && <div className="mt-4 grid gap-3 rounded-xl bg-secondary/40 p-4 md:grid-cols-3"><Field label="Delivery address" value={checkout.deliveryAddress} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, deliveryAddress: value } }))} required testId={`input-quote-delivery-address-${quote.id}`} placeholder="Street, area, city and state" /><label className="block"><span className="mb-2 block text-sm font-bold">Payment method</span><select value={checkout.paymentMode} onChange={(event) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, paymentMode: event.target.value as CheckoutInput['paymentMode'] } }))} className="h-12 w-full rounded-xl border border-input bg-background px-3" data-testid={`select-quote-payment-mode-${quote.id}`}><option value="sandbox">Sandbox demo</option><option value="paystack" disabled={!methods.data?.paystackAvailable}>Paystack</option></select></label>{checkout.paymentMode === 'paystack' && <Field label="Payment email" value={checkout.email} onChange={(value) => setCheckoutInputs((current) => ({ ...current, [quote.id]: { ...checkout, email: value } }))} type="email" required testId={`input-quote-payment-email-${quote.id}`} placeholder="you@example.com" />}</div>}
+        {completedGroups[quote.id] && <div className="mt-4"><Notice tone="success">Sandbox order {completedGroups[quote.id]} was created. No payment was collected. <Link href="/orders" className="font-bold underline">View your orders</Link></Notice></div>}
+        {update.isError && <div className="mt-3"><Notice>We couldn't save that decision or create the order. Please try again.</Notice></div>}
+        {quote.status === 'accepted' && !completedGroups[quote.id] && <p className="mt-4 text-sm text-muted-foreground">This supplier quote has been accepted.</p>}
+      </article>;
+    })}</div>}
   </main>;
 }
 

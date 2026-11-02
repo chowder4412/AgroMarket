@@ -7,6 +7,7 @@ const { matchesExpectedPayment, verifyPaystackSignature } = await import(
   "./paystack-security.ts"
 );
 const { canTransitionDispute } = await import("./dispute-state.ts");
+const { calculateQuotationPrice } = await import("./quotation-pricing.ts");
 
 const rawBody = Buffer.from('{"event":"charge.success","data":{"id":42}}');
 const signature = createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
@@ -61,4 +62,30 @@ test("enforces the dispute review state machine", () => {
   assert.equal(canTransitionDispute("reviewing", "rejected"), true);
   assert.equal(canTransitionDispute("resolved", "reviewing"), false);
   assert.equal(canTransitionDispute("rejected", "resolved"), false);
+});
+
+test("computes a quote total from complete per-line prices", () => {
+  const result = calculateQuotationPrice(
+    [
+      { quotationItemId: 7, quantity: 10 },
+      { quotationItemId: 8, quantity: 2 },
+    ],
+    [
+      { quotationItemId: 7, unitPriceNgn: 1_200 },
+      { quotationItemId: 8, unitPriceNgn: 8_500 },
+    ],
+  );
+
+  assert.equal(result.totalNgn, 29_000);
+  assert.deepEqual(result.items.map((item) => item.quantity * item.unitPriceNgn), [12_000, 17_000]);
+});
+
+test("rejects incomplete, duplicate, or unrelated quote line prices", () => {
+  const request = [{ quotationItemId: 7, quantity: 10 }];
+  assert.throws(() => calculateQuotationPrice(request, []));
+  assert.throws(() => calculateQuotationPrice(request, [
+    { quotationItemId: 7, unitPriceNgn: 1_000 },
+    { quotationItemId: 7, unitPriceNgn: 1_100 },
+  ]));
+  assert.throws(() => calculateQuotationPrice(request, [{ quotationItemId: 99, unitPriceNgn: 1_000 }]));
 });

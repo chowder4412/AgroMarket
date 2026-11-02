@@ -1,9 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { Router, type IRouter } from "express";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import {
+  checkoutPaymentsTable,
   db,
+  inventoryTable,
+  orderItemsTable,
+  ordersTable,
+  paymentsTable,
   productsTable,
   quotationItemsTable,
+  quotationResponseItemsTable,
   quotationResponsesTable,
   quotationsTable,
   sellerProfilesTable,
@@ -21,8 +28,12 @@ import {
   UpdateQuotationResponseResponse,
 } from "@workspace/api-zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { initializePaystackTransaction, isPaystackConfigured, markPaystackPaymentFailed } from "../lib/paystack";
+import { calculateQuotationPrice } from "../lib/quotation-pricing";
+import { orderPayload } from "./commerce";
 
 const router: IRouter = Router();
+class QuoteStockChangedError extends Error {}
 
 async function quotationPayload(id: number, sellerId?: number) {
   const [quotation] = await db
@@ -65,6 +76,30 @@ async function quotationPayload(id: number, sellerId?: number) {
       eq(quotationResponsesTable.sellerId, sellerProfilesTable.id),
     )
     .where(eq(quotationResponsesTable.quotationId, id));
+  const responseItems = responses.length
+    ? await db
+        .select({
+          responseId: quotationResponseItemsTable.responseId,
+          quotationItemId: quotationItemsTable.id,
+          unitPriceNgn: quotationResponseItemsTable.unitPriceNgn,
+          quantity: quotationItemsTable.quantity,
+          name: productsTable.name,
+          unit: productsTable.unit,
+        })
+        .from(quotationResponseItemsTable)
+        .innerJoin(
+          quotationItemsTable,
+          eq(quotationResponseItemsTable.quotationItemId, quotationItemsTable.id),
+        )
+        .innerJoin(productsTable, eq(quotationItemsTable.productId, productsTable.id))
+        .where(inArray(quotationResponseItemsTable.responseId, responses.map((response) => response.id)))
+    : [];
+  const responseItemsById = new Map<number, typeof responseItems>();
+  for (const item of responseItems) {
+    const itemsForResponse = responseItemsById.get(item.responseId) ?? [];
+    itemsForResponse.push(item);
+    responseItemsById.set(item.responseId, itemsForResponse);
+  }
   return {
     id: quotation.id,
     businessName: quotation.businessName,
@@ -76,7 +111,12 @@ async function quotationPayload(id: number, sellerId?: number) {
       .map(({ sellerId: _sellerId, ...item }) => item),
     responses: responses
       .filter((response) => sellerId === undefined || response.sellerId === sellerId)
-      .map(({ sellerId: _sellerId, ...response }) => response),
+      .map(({ sellerId: _sellerId, ...response }) => ({
+        ...response,
+        items: (responseItemsById.get(response.id) ?? []).map(
+          ({ responseId: _responseId, ...item }) => item,
+        ),
+      })),
   };
 }
 
@@ -188,10 +228,6 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    if (parsed.data.status === "quoted" && (!parsed.data.totalNgn || parsed.data.totalNgn < 1)) {
-      res.status(400).json({ error: "A positive quote total is required." });
-      return;
-    }
     const [seller] = await db
       .select()
       .from(sellerProfilesTable)
@@ -211,7 +247,7 @@ router.post(
       return;
     }
     const eligibleItems = await db
-      .select({ id: quotationItemsTable.id })
+      .select({ quotationItemId: quotationItemsTable.id, quantity: quotationItemsTable.quantity })
       .from(quotationItemsTable)
       .innerJoin(productsTable, eq(quotationItemsTable.productId, productsTable.id))
       .where(
@@ -224,39 +260,60 @@ router.post(
       res.status(404).json({ error: "This request contains no products from your shop." });
       return;
     }
-
-    const [response] = await db
-      .insert(quotationResponsesTable)
-      .values({
-        quotationId: quotation.id,
-        sellerId: seller.id,
-        status: parsed.data.status,
-        totalNgn: parsed.data.status === "quoted" ? parsed.data.totalNgn! : null,
-        message: parsed.data.message,
-      })
-      .onConflictDoUpdate({
-        target: [quotationResponsesTable.quotationId, quotationResponsesTable.sellerId],
-        set: {
+    let pricedItems: ReturnType<typeof calculateQuotationPrice>["items"] = [];
+    let totalNgn: number | null = null;
+    if (parsed.data.status === "quoted") {
+      try {
+        const pricing = calculateQuotationPrice(eligibleItems, parsed.data.items ?? []);
+        pricedItems = pricing.items;
+        totalNgn = pricing.totalNgn;
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : "Invalid quote prices." });
+        return;
+      }
+    }
+    const response = await db.transaction(async (tx) => {
+      const [saved] = await tx
+        .insert(quotationResponsesTable)
+        .values({
+          quotationId: quotation.id,
+          sellerId: seller.id,
           status: parsed.data.status,
-          totalNgn: parsed.data.status === "quoted" ? parsed.data.totalNgn! : null,
+          totalNgn,
           message: parsed.data.message,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    await db
-      .update(quotationsTable)
-      .set({ status: parsed.data.status === "quoted" ? "quoted" : quotation.status })
-      .where(eq(quotationsTable.id, quotation.id));
+        })
+        .onConflictDoUpdate({
+          target: [quotationResponsesTable.quotationId, quotationResponsesTable.sellerId],
+          set: {
+            status: parsed.data.status,
+            totalNgn,
+            message: parsed.data.message,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      await tx
+        .delete(quotationResponseItemsTable)
+        .where(eq(quotationResponseItemsTable.responseId, saved.id));
+      if (pricedItems.length) {
+        await tx.insert(quotationResponseItemsTable).values(
+          pricedItems.map((item) => ({
+            responseId: saved.id,
+            quotationItemId: item.quotationItemId,
+            unitPriceNgn: item.unitPriceNgn,
+          })),
+        );
+      }
+      await tx
+        .update(quotationsTable)
+        .set({ status: parsed.data.status === "quoted" ? "quoted" : quotation.status })
+        .where(eq(quotationsTable.id, quotation.id));
+      return saved;
+    });
+    const updated = await quotationPayload(quotation.id, seller.id);
+    const responsePayload = updated?.responses.find((item) => item.id === response.id);
     res.json(
-      RespondToQuotationResponse.parse({
-        id: response.id,
-        sellerName: seller.businessName,
-        status: response.status,
-        totalNgn: response.totalNgn,
-        message: response.message,
-        createdAt: response.createdAt,
-      }),
+      RespondToQuotationResponse.parse(responsePayload),
     );
   },
 );
@@ -304,53 +361,265 @@ router.patch(
       res.status(404).json({ error: "Quote response not found." });
       return;
     }
+    if (parsed.data.status === "accepted") {
+      const deliveryAddress = parsed.data.deliveryAddress?.trim();
+      const paymentMode = parsed.data.paymentMode;
+      const email = parsed.data.email?.trim();
+      if (!deliveryAddress || !paymentMode) {
+        res.status(400).json({ error: "Delivery address and payment method are required to accept a quote." });
+        return;
+      }
+      if (paymentMode === "paystack" && !email) {
+        res.status(400).json({ error: "An email address is required for Paystack checkout." });
+        return;
+      }
+      if (paymentMode === "paystack" && !isPaystackConfigured()) {
+        res.status(503).json({ error: "Paystack is not configured." });
+        return;
+      }
+
+      const groupNumber = `AM-${randomUUID().slice(0, 8).toUpperCase()}`;
+      const reference = `AMPS-${randomUUID()}`;
+      let acceptedOrder: { id: number; totalNgn: number };
+      try {
+        acceptedOrder = await db.transaction(async (tx) => {
+          const [lockedQuotation] = await tx
+            .select()
+            .from(quotationsTable)
+            .where(
+              and(
+                eq(quotationsTable.id, quotation.id),
+                eq(quotationsTable.buyerId, req.marketplaceUserId!),
+              ),
+            )
+            .for("update")
+            .limit(1);
+          if (!lockedQuotation || lockedQuotation.status === "accepted" || lockedQuotation.status === "declined") {
+            throw new Error("This quote request has already been closed.");
+          }
+          const [lockedResponse] = await tx
+            .select()
+            .from(quotationResponsesTable)
+            .where(
+              and(
+                eq(quotationResponsesTable.id, response.id),
+                eq(quotationResponsesTable.quotationId, quotation.id),
+                eq(quotationResponsesTable.status, "quoted"),
+              ),
+            )
+            .for("update")
+            .limit(1);
+          if (!lockedResponse) throw new Error("This quote is no longer available.");
+
+          const requestedItems = await tx
+            .select({
+              quotationItemId: quotationItemsTable.id,
+              quantity: quotationItemsTable.quantity,
+              productId: productsTable.id,
+              name: productsTable.name,
+              unit: productsTable.unit,
+              status: productsTable.status,
+              sellerId: productsTable.sellerId,
+            })
+            .from(quotationItemsTable)
+            .innerJoin(productsTable, eq(quotationItemsTable.productId, productsTable.id))
+            .where(
+              and(
+                eq(quotationItemsTable.quotationId, quotation.id),
+                eq(productsTable.sellerId, lockedResponse.sellerId),
+              ),
+            );
+          const proposedPrices = await tx
+            .select({
+              quotationItemId: quotationResponseItemsTable.quotationItemId,
+              unitPriceNgn: quotationResponseItemsTable.unitPriceNgn,
+            })
+            .from(quotationResponseItemsTable)
+            .where(eq(quotationResponseItemsTable.responseId, lockedResponse.id));
+          const pricing = calculateQuotationPrice(requestedItems, proposedPrices);
+          if (requestedItems.some((item) => item.status !== "active")) {
+            throw new QuoteStockChangedError("A quoted product is no longer available.");
+          }
+
+          for (const item of pricing.items) {
+            const requested = requestedItems.find(
+              (entry) => entry.quotationItemId === item.quotationItemId,
+            );
+            if (!requested) throw new Error("Quoted order items no longer match the request.");
+            const [inventory] = await tx
+              .update(inventoryTable)
+              .set(
+                paymentMode === "paystack"
+                  ? { reserved: sql`${inventoryTable.reserved} + ${item.quantity}` }
+                  : { quantity: sql`${inventoryTable.quantity} - ${item.quantity}` },
+              )
+              .where(
+                and(
+                  eq(inventoryTable.productId, requested.productId),
+                  sql`${inventoryTable.quantity} - ${inventoryTable.reserved} >= ${item.quantity}`,
+                ),
+              )
+              .returning({ productId: inventoryTable.productId });
+            if (!inventory) throw new QuoteStockChangedError("Stock changed while accepting the quote.");
+          }
+
+          const [createdOrder] = await tx
+            .insert(ordersTable)
+            .values({
+              orderNumber: `${groupNumber}-01`,
+              orderGroupNumber: groupNumber,
+              sellerId: lockedResponse.sellerId,
+              buyerId: req.marketplaceUserId!,
+              status: paymentMode === "sandbox" ? "paid" : "pending_payment",
+              paymentStatus: paymentMode === "sandbox" ? "paid" : "pending",
+              paymentMode: paymentMode === "sandbox" ? "sandbox" : "provider_pending",
+              totalNgn: pricing.totalNgn,
+              deliveryAddress,
+            })
+            .returning({ id: ordersTable.id });
+          await tx.insert(orderItemsTable).values(
+            pricing.items.map((item) => {
+              const requested = requestedItems.find(
+                (entry) => entry.quotationItemId === item.quotationItemId,
+              )!;
+              return {
+                orderId: createdOrder.id,
+                productId: requested.productId,
+                sellerId: lockedResponse.sellerId,
+                productName: requested.name,
+                unit: requested.unit,
+                unitPriceNgn: item.unitPriceNgn,
+                quantity: item.quantity,
+              };
+            }),
+          );
+          await tx.insert(paymentsTable).values({
+            orderId: createdOrder.id,
+            provider: paymentMode === "sandbox" ? "sandbox" : "paystack",
+            status: paymentMode === "sandbox" ? "paid" : "pending",
+            amountNgn: pricing.totalNgn,
+            providerReference: paymentMode === "sandbox" ? groupNumber : `${reference}-01`,
+          });
+          if (paymentMode === "paystack") {
+            await tx.insert(checkoutPaymentsTable).values({
+              orderGroupNumber: groupNumber,
+              buyerId: req.marketplaceUserId!,
+              provider: "paystack",
+              status: "pending",
+              amountNgn: pricing.totalNgn,
+              providerReference: reference,
+              quotationResponseId: lockedResponse.id,
+              expiresAt: new Date(Date.now() + 15 * 60_000),
+            });
+          }
+          await tx
+            .update(quotationResponsesTable)
+            .set({ status: "accepted", updatedAt: new Date() })
+            .where(eq(quotationResponsesTable.id, lockedResponse.id));
+          await tx
+            .update(quotationResponsesTable)
+            .set({ status: "declined", updatedAt: new Date() })
+            .where(
+              and(
+                eq(quotationResponsesTable.quotationId, quotation.id),
+                ne(quotationResponsesTable.id, lockedResponse.id),
+                eq(quotationResponsesTable.status, "quoted"),
+              ),
+            );
+          await tx
+            .update(quotationsTable)
+            .set({ status: "accepted" })
+            .where(eq(quotationsTable.id, quotation.id));
+          return { id: createdOrder.id, totalNgn: pricing.totalNgn };
+        });
+      } catch (error) {
+        if (error instanceof QuoteStockChangedError) {
+          res.status(409).json({ error: error.message });
+          return;
+        }
+        if (error instanceof Error && error.message === "This quote request has already been closed.") {
+          res.status(409).json({ error: error.message });
+          return;
+        }
+        if (error instanceof Error && error.message === "This quote is no longer available.") {
+          res.status(409).json({ error: error.message });
+          return;
+        }
+        throw error;
+      }
+
+      let authorizationUrl: string | null = null;
+      if (paymentMode === "paystack") {
+        try {
+          const initialized = await initializePaystackTransaction({
+            email: email!,
+            amountNgn: acceptedOrder.totalNgn,
+            reference,
+            orderGroupNumber: groupNumber,
+          });
+          authorizationUrl = initialized.authorizationUrl;
+          await db
+            .update(checkoutPaymentsTable)
+            .set({ authorizationUrl })
+            .where(eq(checkoutPaymentsTable.providerReference, reference));
+        } catch {
+          await markPaystackPaymentFailed(reference, `initialize-failed:${groupNumber}`);
+          res.status(502).json({ error: "Paystack could not start this payment. The order was cancelled and reserved stock released." });
+          return;
+        }
+      }
+      const updatedQuotation = await quotationPayload(quotation.id);
+      const order = await orderPayload(acceptedOrder.id);
+      res.json(
+        UpdateQuotationResponseResponse.parse({
+          quotation: updatedQuotation,
+          orderGroupNumber: groupNumber,
+          status: paymentMode === "sandbox" ? "paid" : "pending",
+          authorizationUrl,
+          orders: order ? [order] : [],
+        }),
+      );
+      return;
+    }
     await db.transaction(async (tx) => {
       await tx
         .update(quotationResponsesTable)
-        .set({ status: parsed.data.status, updatedAt: new Date() })
+        .set({ status: "declined", updatedAt: new Date() })
         .where(eq(quotationResponsesTable.id, response.id));
-      if (parsed.data.status === "accepted") {
-        await tx
-          .update(quotationResponsesTable)
-          .set({ status: "declined", updatedAt: new Date() })
-          .where(
-            and(
-              eq(quotationResponsesTable.quotationId, quotation.id),
-              eq(quotationResponsesTable.status, "quoted"),
-            ),
-          );
-        await tx
-          .update(quotationsTable)
-          .set({ status: "accepted" })
-          .where(eq(quotationsTable.id, quotation.id));
-      } else {
-        const sellers = await tx
-          .selectDistinct({ sellerId: productsTable.sellerId })
-          .from(quotationItemsTable)
-          .innerJoin(productsTable, eq(quotationItemsTable.productId, productsTable.id))
-          .where(eq(quotationItemsTable.quotationId, quotation.id));
-        const responses = await tx
-          .select({ status: quotationResponsesTable.status })
-          .from(quotationResponsesTable)
-          .where(eq(quotationResponsesTable.quotationId, quotation.id));
-        const stillQuoted = responses.some((entry) => entry.status === "quoted");
-        const allSellersResponded = responses.length >= sellers.length;
-        await tx
-          .update(quotationsTable)
-          .set({
-            status: stillQuoted
-              ? "quoted"
-              : allSellersResponded
-                ? "declined"
-                : quotation.status === "quoted"
-                  ? "quoted"
-                  : "requested",
-          })
-          .where(eq(quotationsTable.id, quotation.id));
-      }
+      const sellers = await tx
+        .selectDistinct({ sellerId: productsTable.sellerId })
+        .from(quotationItemsTable)
+        .innerJoin(productsTable, eq(quotationItemsTable.productId, productsTable.id))
+        .where(eq(quotationItemsTable.quotationId, quotation.id));
+      const responses = await tx
+        .select({ status: quotationResponsesTable.status })
+        .from(quotationResponsesTable)
+        .where(eq(quotationResponsesTable.quotationId, quotation.id));
+      const stillQuoted = responses.some((entry) => entry.status === "quoted");
+      const allSellersResponded = responses.length >= sellers.length;
+      await tx
+        .update(quotationsTable)
+        .set({
+          status: stillQuoted
+            ? "quoted"
+            : allSellersResponded
+              ? "declined"
+              : quotation.status === "quoted"
+                ? "quoted"
+                : "requested",
+        })
+        .where(eq(quotationsTable.id, quotation.id));
     });
     const updated = await quotationPayload(quotation.id);
-    res.json(UpdateQuotationResponseResponse.parse(updated));
+    res.json(
+      UpdateQuotationResponseResponse.parse({
+        quotation: updated,
+        orderGroupNumber: null,
+        status: null,
+        authorizationUrl: null,
+        orders: [],
+      }),
+    );
   },
 );
 

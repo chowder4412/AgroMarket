@@ -48,6 +48,7 @@ import type {
   ProductInput,
   ProductUpdate,
   Quotation,
+  QuotationDecisionResult,
   QuotationInput,
   QuotationResponse,
   QuotationResponseInput,
@@ -2921,7 +2922,7 @@ export const getUpdateQuotationResponseUrl = (id: number,
  */
 export const updateQuotationResponse = async (id: number,
     responseId: number,
-    quotationResponseUpdate: QuotationResponseUpdate, options?: Parameters<typeof customFetch>[1]): Promise<Quotation> => {
+    quotationResponseUpdate: QuotationResponseUpdate, options?: Parameters<typeof customFetch>[1]): Promise<QuotationDecisionResult> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -2937,7 +2938,7 @@ export const updateQuotationResponse = async (id: number,
     }
     return headers;
   };
-return customFetch<Quotation>(getUpdateQuotationResponseUrl(id,responseId),
+return customFetch<QuotationDecisionResult>(getUpdateQuotationResponseUrl(id,responseId),
   {
     ...options,
     method: 'PATCH',

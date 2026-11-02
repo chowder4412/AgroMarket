@@ -7,6 +7,8 @@ import {
   ordersTable,
   paymentWebhookEventsTable,
   paymentsTable,
+  quotationResponsesTable,
+  quotationsTable,
 } from "@workspace/db";
 import {
   isPaystackConfigured,
@@ -227,6 +229,33 @@ async function updatePaymentGroup(
         .update(paymentsTable)
         .set({ status: nextStatus })
         .where(inArray(paymentsTable.orderId, orderIds));
+    }
+    if (nextStatus === "failed" && group.quotationResponseId !== null) {
+      const [response] = await tx
+        .select({ id: quotationResponsesTable.id, quotationId: quotationResponsesTable.quotationId })
+        .from(quotationResponsesTable)
+        .where(
+          and(
+            eq(quotationResponsesTable.id, group.quotationResponseId),
+            eq(quotationResponsesTable.status, "accepted"),
+          ),
+        )
+        .limit(1);
+      if (response) {
+        await tx
+          .update(quotationResponsesTable)
+          .set({ status: "quoted", updatedAt: new Date() })
+          .where(eq(quotationResponsesTable.id, response.id));
+        await tx
+          .update(quotationsTable)
+          .set({ status: "quoted" })
+          .where(
+            and(
+              eq(quotationsTable.id, response.quotationId),
+              eq(quotationsTable.status, "accepted"),
+            ),
+          );
+      }
     }
     return {
       status: nextStatus,

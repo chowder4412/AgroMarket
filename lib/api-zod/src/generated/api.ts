@@ -667,6 +667,9 @@ export const UpdateSellerOrderStatusResponse = zod.object({
 /**
  * @summary List quotations requested by the signed-in business buyer
  */
+
+
+
 export const ListQuotationsResponseItem = zod.object({
   "id": zod.number().int(),
   "businessName": zod.string(),
@@ -688,7 +691,14 @@ export const ListQuotationsResponseItem = zod.object({
   "status": zod.enum(['quoted', 'accepted', 'declined']),
   "totalNgn": zod.number().int().nullable(),
   "message": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1),
+  "quantity": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece'])
+}))
 }))
 })
 export const ListQuotationsResponse = zod.array(ListQuotationsResponseItem)
@@ -712,6 +722,9 @@ export const CreateQuotationBody = zod.object({
 })).min(1)
 })
 
+
+
+
 export const CreateQuotationResponse = zod.object({
   "id": zod.number().int(),
   "businessName": zod.string(),
@@ -733,7 +746,14 @@ export const CreateQuotationResponse = zod.object({
   "status": zod.enum(['quoted', 'accepted', 'declined']),
   "totalNgn": zod.number().int().nullable(),
   "message": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1),
+  "quantity": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece'])
+}))
 }))
 })
 
@@ -741,6 +761,9 @@ export const CreateQuotationResponse = zod.object({
 /**
  * @summary List bulk quote requests containing this seller's products
  */
+
+
+
 export const ListSellerQuotationsResponseItem = zod.object({
   "id": zod.number().int(),
   "businessName": zod.string(),
@@ -762,7 +785,14 @@ export const ListSellerQuotationsResponseItem = zod.object({
   "status": zod.enum(['quoted', 'accepted', 'declined']),
   "totalNgn": zod.number().int().nullable(),
   "message": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1),
+  "quantity": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece'])
+}))
 }))
 })
 export const ListSellerQuotationsResponse = zod.array(ListSellerQuotationsResponseItem)
@@ -782,9 +812,15 @@ export const respondToQuotationBodyMessageMax = 1000;
 
 export const RespondToQuotationBody = zod.object({
   "status": zod.enum(['quoted', 'declined']),
-  "totalNgn": zod.number().int().min(1).optional(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1)
+})).optional(),
   "message": zod.string().max(respondToQuotationBodyMessageMax)
 })
+
+
+
 
 export const RespondToQuotationResponse = zod.object({
   "id": zod.number().int(),
@@ -792,7 +828,14 @@ export const RespondToQuotationResponse = zod.object({
   "status": zod.enum(['quoted', 'accepted', 'declined']),
   "totalNgn": zod.number().int().nullable(),
   "message": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1),
+  "quantity": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece'])
+}))
 })
 
 
@@ -804,11 +847,23 @@ export const UpdateQuotationResponseParams = zod.object({
   "responseId": zod.coerce.number().int()
 })
 
+export const updateQuotationResponseBodyDeliveryAddressMin = 8;
+export const updateQuotationResponseBodyDeliveryAddressMax = 1000;
+
+
+
 export const UpdateQuotationResponseBody = zod.object({
-  "status": zod.enum(['accepted', 'declined'])
+  "status": zod.enum(['accepted', 'declined']),
+  "deliveryAddress": zod.string().min(updateQuotationResponseBodyDeliveryAddressMin).max(updateQuotationResponseBodyDeliveryAddressMax).optional(),
+  "paymentMode": zod.enum(['sandbox', 'paystack']).optional(),
+  "email": zod.string().email().optional()
 })
 
+
+
+
 export const UpdateQuotationResponseResponse = zod.object({
+  "quotation": zod.object({
   "id": zod.number().int(),
   "businessName": zod.string(),
   "status": zod.enum(['requested', 'quoted', 'accepted', 'declined']),
@@ -829,7 +884,37 @@ export const UpdateQuotationResponseResponse = zod.object({
   "status": zod.enum(['quoted', 'accepted', 'declined']),
   "totalNgn": zod.number().int().nullable(),
   "message": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "unitPriceNgn": zod.number().int().min(1),
+  "quantity": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece'])
+}))
+}))
+}),
+  "orderGroupNumber": zod.string().nullable(),
+  "status": zod.union([zod.literal('pending'),zod.literal('paid'),zod.literal('failed'),zod.literal(null)]).nullable(),
+  "authorizationUrl": zod.string().url().nullable(),
+  "orders": zod.array(zod.object({
+  "id": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['pending_payment', 'paid', 'processing', 'in_transit', 'delivered', 'cancelled']),
+  "paymentStatus": zod.enum(['pending', 'paid', 'failed']),
+  "paymentMode": zod.enum(['sandbox', 'provider_pending']),
+  "total": zod.number(),
+  "deliveryAddress": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "productId": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
+  "unitPrice": zod.number(),
+  "quantity": zod.number().int(),
+  "sellerName": zod.string()
+}))
 }))
 })
 

@@ -372,6 +372,15 @@ export const QuotationResponseStatus = {
   declined: 'declined',
 } as const;
 
+export interface QuotationResponseItem {
+  quotationItemId: number;
+  /** @minimum 1 */
+  unitPriceNgn: number;
+  quantity: number;
+  name: string;
+  unit: ProductUnit;
+}
+
 export interface QuotationResponse {
   id: number;
   sellerName: string;
@@ -380,6 +389,7 @@ export interface QuotationResponse {
   totalNgn: number | null;
   message: string;
   createdAt: string;
+  items: QuotationResponseItem[];
 }
 
 export type QuotationResponseInputStatus = typeof QuotationResponseInputStatus[keyof typeof QuotationResponseInputStatus];
@@ -390,10 +400,15 @@ export const QuotationResponseInputStatus = {
   declined: 'declined',
 } as const;
 
+export type QuotationResponseInputItemsItem = {
+  quotationItemId: number;
+  /** @minimum 1 */
+  unitPriceNgn: number;
+};
+
 export interface QuotationResponseInput {
   status: QuotationResponseInputStatus;
-  /** @minimum 1 */
-  totalNgn?: number;
+  items?: QuotationResponseInputItemsItem[];
   /** @maxLength 1000 */
   message: string;
 }
@@ -406,9 +421,36 @@ export const QuotationResponseUpdateStatus = {
   declined: 'declined',
 } as const;
 
+export type QuotationResponseUpdatePaymentMode = typeof QuotationResponseUpdatePaymentMode[keyof typeof QuotationResponseUpdatePaymentMode];
+
+
+export const QuotationResponseUpdatePaymentMode = {
+  sandbox: 'sandbox',
+  paystack: 'paystack',
+} as const;
+
 export interface QuotationResponseUpdate {
   status: QuotationResponseUpdateStatus;
+  /**
+     * @minLength 8
+     * @maxLength 1000
+     */
+  deliveryAddress?: string;
+  paymentMode?: QuotationResponseUpdatePaymentMode;
+  email?: string;
 }
+
+/**
+ * @nullable
+ */
+export type QuotationDecisionResultStatus = typeof QuotationDecisionResultStatus[keyof typeof QuotationDecisionResultStatus] | null;
+
+
+export const QuotationDecisionResultStatus = {
+  pending: 'pending',
+  paid: 'paid',
+  failed: 'failed',
+} as const;
 
 export type QuotationStatus = typeof QuotationStatus[keyof typeof QuotationStatus];
 
@@ -428,6 +470,17 @@ export interface Quotation {
   createdAt: string;
   items: QuotationItem[];
   responses: QuotationResponse[];
+}
+
+export interface QuotationDecisionResult {
+  quotation: Quotation;
+  /** @nullable */
+  orderGroupNumber: string | null;
+  /** @nullable */
+  status: QuotationDecisionResultStatus;
+  /** @nullable */
+  authorizationUrl: string | null;
+  orders: Order[];
 }
 
 export type OrderDisputeStatus = typeof OrderDisputeStatus[keyof typeof OrderDisputeStatus];

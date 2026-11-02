@@ -43,6 +43,7 @@ AgroMarket Nigeria connects consumers and business buyers with verified local fa
 - Keep the workspace's PostgreSQL + Drizzle setup; do not introduce a parallel Prisma schema.
 - Persist app roles in PostgreSQL and enforce them in API middleware; users cannot self-assign admin.
 - Store NGN prices as whole naira integers. Checkout splits a multi-seller cart into seller-specific orders and updates stock atomically.
+- Supplier quotes contain server-validated per-line prices. Accepting a quote creates a seller order; Paystack stock remains reserved until provider confirmation, and failed/expired payments release stock and reopen the quote.
 - Checkout is explicitly sandbox-only and creates a simulated paid order without charging money.
 
 ## Product

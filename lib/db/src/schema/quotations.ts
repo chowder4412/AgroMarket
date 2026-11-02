@@ -72,6 +72,21 @@ export const quotationResponsesTable = pgTable(
   (table) => [unique().on(table.quotationId, table.sellerId)],
 );
 
+export const quotationResponseItemsTable = pgTable(
+  "quotation_response_items",
+  {
+    id: serial("id").primaryKey(),
+    responseId: integer("response_id")
+      .notNull()
+      .references(() => quotationResponsesTable.id, { onDelete: "cascade" }),
+    quotationItemId: integer("quotation_item_id")
+      .notNull()
+      .references(() => quotationItemsTable.id, { onDelete: "restrict" }),
+    unitPriceNgn: integer("unit_price_ngn").notNull(),
+  },
+  (table) => [unique().on(table.responseId, table.quotationItemId)],
+);
+
 export const insertQuotationSchema = createInsertSchema(quotationsTable).omit({
   id: true,
   createdAt: true,
@@ -82,7 +97,11 @@ export const insertQuotationItemSchema = createInsertSchema(
 export const insertQuotationResponseSchema = createInsertSchema(
   quotationResponsesTable,
 ).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertQuotationResponseItemSchema = createInsertSchema(
+  quotationResponseItemsTable,
+).omit({ id: true });
 
 export type Quotation = typeof quotationsTable.$inferSelect;
 export type QuotationItem = typeof quotationItemsTable.$inferSelect;
 export type QuotationResponse = typeof quotationResponsesTable.$inferSelect;
+export type QuotationResponseItem = typeof quotationResponseItemsTable.$inferSelect;

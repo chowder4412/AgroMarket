@@ -1,0 +1,2 @@
+ALTER TABLE "checkout_payments" ADD COLUMN "quotation_response_id" integer;--> statement-breakpoint
+ALTER TABLE "checkout_payments" ADD CONSTRAINT "checkout_payments_quotation_response_id_quotation_responses_id_fk" FOREIGN KEY ("quotation_response_id") REFERENCES "public"."quotation_responses"("id") ON DELETE set null ON UPDATE no action;
