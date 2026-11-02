@@ -10,6 +10,7 @@ import {
 import {
   cartsTable,
   cartItemsTable,
+  checkoutPaymentsTable,
   db,
   inventoryTable,
   orderItemsTable,
@@ -33,6 +34,11 @@ import {
   UpdateCartItemResponse,
 } from "@workspace/api-zod";
 import { requireAuth } from "../middlewares/auth";
+import {
+  initializePaystackTransaction,
+  isPaystackConfigured,
+  markPaystackPaymentFailed,
+} from "../lib/paystack";
 
 const router: IRouter = Router();
 
@@ -168,6 +174,169 @@ export async function orderPayload(orderId: number) {
     .where(eq(orderItemsTable.orderId, orderId));
 
   return { ...order, items };
+}
+
+async function createPaystackCheckout(
+  userId: number,
+  deliveryAddress: string,
+  email: string,
+) {
+  const cart = await ensureCart(userId);
+  const groupNumber = `AM-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const reference = `AMPS-${randomUUID()}`;
+  const checkout = await db.transaction(async (tx) => {
+    await tx
+      .select({ id: cartsTable.id })
+      .from(cartsTable)
+      .where(eq(cartsTable.id, cart.id))
+      .for("update");
+    const rows = await tx
+      .select({
+        cartItemId: cartItemsTable.id,
+        productId: productsTable.id,
+        sellerId: productsTable.sellerId,
+        name: productsTable.name,
+        unit: productsTable.unit,
+        price: productsTable.priceNgn,
+        minOrder: productsTable.minOrder,
+        quantity: cartItemsTable.quantity,
+        status: productsTable.status,
+      })
+      .from(cartItemsTable)
+      .innerJoin(productsTable, eq(cartItemsTable.productId, productsTable.id))
+      .innerJoin(inventoryTable, eq(productsTable.id, inventoryTable.productId))
+      .where(eq(cartItemsTable.cartId, cart.id));
+    if (!rows.length) throw new Error("Your cart is empty.");
+
+    const productIds = rows.map((row) => row.productId);
+    const tiers = await tx
+      .select({
+        productId: productWholesaleTiersTable.productId,
+        minQuantity: productWholesaleTiersTable.minQuantity,
+        unitPriceNgn: productWholesaleTiersTable.unitPriceNgn,
+      })
+      .from(productWholesaleTiersTable)
+      .where(inArray(productWholesaleTiersTable.productId, productIds))
+      .orderBy(asc(productWholesaleTiersTable.minQuantity));
+    const groups = new Map<number, typeof rows>();
+    for (const row of rows) {
+      if (row.status !== "active" || row.quantity < row.minOrder) {
+        throw new StockChangedError("A product is no longer available in that quantity.");
+      }
+      const [reserved] = await tx
+        .update(inventoryTable)
+        .set({ reserved: sql`${inventoryTable.reserved} + ${row.quantity}` })
+        .where(
+          and(
+            eq(inventoryTable.productId, row.productId),
+            sql`${inventoryTable.quantity} - ${inventoryTable.reserved} >= ${row.quantity}`,
+          ),
+        )
+        .returning({ productId: inventoryTable.productId });
+      if (!reserved) {
+        throw new StockChangedError(
+          "Stock changed while checking out. Review your cart and try again.",
+        );
+      }
+      const group = groups.get(row.sellerId) ?? [];
+      group.push(row);
+      groups.set(row.sellerId, group);
+    }
+
+    let total = 0;
+    const orderIds: number[] = [];
+    let sellerIndex = 1;
+    for (const [sellerId, sellerRows] of groups) {
+      const lines = sellerRows.map((row) => {
+        const applicable = tiers
+          .filter(
+            (tier) =>
+              tier.productId === row.productId && tier.minQuantity <= row.quantity,
+          )
+          .at(-1);
+        return { ...row, unitPrice: applicable?.unitPriceNgn ?? row.price };
+      });
+      const sellerTotal = lines.reduce(
+        (sum, line) => sum + line.unitPrice * line.quantity,
+        0,
+      );
+      total += sellerTotal;
+      const [order] = await tx
+        .insert(ordersTable)
+        .values({
+          orderNumber: `${groupNumber}-${String(sellerIndex).padStart(2, "0")}`,
+          orderGroupNumber: groupNumber,
+          sellerId,
+          buyerId: userId,
+          status: "pending_payment",
+          paymentStatus: "pending",
+          paymentMode: "provider_pending",
+          totalNgn: sellerTotal,
+          deliveryAddress,
+        })
+        .returning({ id: ordersTable.id });
+      await tx.insert(orderItemsTable).values(
+        lines.map((line) => ({
+          orderId: order.id,
+          productId: line.productId,
+          sellerId,
+          productName: line.name,
+          unit: line.unit,
+          unitPriceNgn: line.unitPrice,
+          quantity: line.quantity,
+        })),
+      );
+      await tx.insert(paymentsTable).values({
+        orderId: order.id,
+        provider: "paystack",
+        status: "pending",
+        amountNgn: sellerTotal,
+        providerReference: `${reference}-${sellerIndex}`,
+      });
+      orderIds.push(order.id);
+      sellerIndex += 1;
+    }
+    await tx.insert(checkoutPaymentsTable).values({
+      orderGroupNumber: groupNumber,
+      buyerId: userId,
+      provider: "paystack",
+      status: "pending",
+      amountNgn: total,
+      providerReference: reference,
+      expiresAt: new Date(Date.now() + 15 * 60_000),
+    });
+    return { orderIds, total, cartItemIds: rows.map((row) => row.cartItemId) };
+  });
+
+  let authorizationUrl: string;
+  try {
+    ({ authorizationUrl } = await initializePaystackTransaction({
+      email,
+      amountNgn: checkout.total,
+      reference,
+      orderGroupNumber: groupNumber,
+    }));
+  } catch {
+    await markPaystackPaymentFailed(reference, `initialize-failed:${groupNumber}`);
+    throw new Error("Paystack could not start this payment. Your cart is unchanged.");
+  }
+
+  await db
+    .delete(cartItemsTable)
+    .where(
+      and(
+        eq(cartItemsTable.cartId, cart.id),
+        inArray(cartItemsTable.id, checkout.cartItemIds),
+      ),
+    );
+  const orders = await Promise.all(checkout.orderIds.map(orderPayload));
+  return CheckoutResponse.parse({
+    orderGroupNumber: groupNumber,
+    grandTotal: checkout.total,
+    status: "pending",
+    authorizationUrl,
+    orders: orders.filter((order) => order !== null),
+  });
 }
 
 router.get("/cart", requireAuth, async (req, res): Promise<void> => {
@@ -314,10 +483,42 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    if (parsed.data.paymentMode !== "sandbox") {
-      res.status(503).json({
-        error: "Live payment processing is not configured. Choose sandbox checkout.",
-      });
+    if (parsed.data.paymentMode === "paystack") {
+      if (!isPaystackConfigured()) {
+        res.status(503).json({ error: "Paystack is not configured." });
+        return;
+      }
+      const email = parsed.data.email?.trim();
+      if (!email) {
+        res.status(400).json({ error: "An email address is required for Paystack checkout." });
+        return;
+      }
+      try {
+        res.status(201).json(
+          await createPaystackCheckout(
+            req.marketplaceUserId!,
+            parsed.data.deliveryAddress,
+            email,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof StockChangedError) {
+          res.status(409).json({ error: error.message });
+          return;
+        }
+        if (error instanceof Error && error.message === "Your cart is empty.") {
+          res.status(400).json({ error: error.message });
+          return;
+        }
+        if (
+          error instanceof Error &&
+          error.message === "Paystack could not start this payment. Your cart is unchanged."
+        ) {
+          res.status(502).json({ error: error.message });
+          return;
+        }
+        throw error;
+      }
       return;
     }
 
@@ -411,6 +612,7 @@ router.post(
             .insert(ordersTable)
             .values({
               orderNumber: `${groupNumber}-${String(sellerIndex).padStart(2, "0")}`,
+              orderGroupNumber: groupNumber,
               sellerId,
               buyerId: userId,
               status: "paid",
@@ -450,6 +652,8 @@ router.post(
       const result = CheckoutResponse.parse({
         orderGroupNumber: groupNumber,
         grandTotal: validOrders.reduce((sum, order) => sum + order.total, 0),
+        status: "paid",
+        authorizationUrl: null,
         orders: validOrders,
       });
       res.status(201).json(result);

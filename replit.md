@@ -4,13 +4,19 @@ AgroMarket Nigeria connects consumers and business buyers with verified local fa
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/agromarket-nigeria run dev` — run the marketplace web app
-- `pnpm --filter @workspace/api-server run dev` — run the shared API server
+- Copy `.env.example` to `.env`, replace every placeholder, then export its values in each terminal with `set -a; . ./.env; set +a`.
+- Run the API with `PORT=3001 pnpm --filter @workspace/api-server run dev`.
+- Run the web app with `PORT=5173 BASE_PATH=/ API_PROXY_TARGET=http://127.0.0.1:3001 pnpm --filter @workspace/agromarket-nigeria run dev`.
+- For a separately hosted API, set `VITE_API_BASE_URL` to its origin only (for example `https://api.example.com`); generated API paths already include `/api`. Include the exact frontend origin in `CORS_ORIGINS`. The frontend sends a Clerk bearer token only in this split-origin mode; same-origin deployments continue to use session cookies.
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — apply Drizzle schema changes to the development database
-- Required environment: Replit PostgreSQL (`DATABASE_URL`) and Clerk Auth (provisioned through the Auth pane)
+- `pnpm --filter @workspace/db run generate` — create a migration after schema changes; review and commit the SQL before deployment.
+- `pnpm --filter @workspace/db run migrate` — apply committed migrations to a provisioned database.
+- `pnpm --filter @workspace/db run push` — development-only schema synchronization. The checked-in `0000` migration is a fresh-database baseline; do not apply it to an existing database without first reconciling its schema and migration history.
+- `node --experimental-strip-types --test artifacts/api-server/src/lib/paystack-security.test.mjs` — run payment security and dispute state-machine tests (Node.js 24+).
+- Required services: PostgreSQL (`DATABASE_URL`) and Clerk Auth (`CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and `VITE_CLERK_PUBLISHABLE_KEY`).
+- Optional Paystack: configure `PAYSTACK_SECRET_KEY`, a public `PAYSTACK_CALLBACK_URL`, and the `/api/payments/paystack/webhook` endpoint in the Paystack dashboard. Use test credentials before launch.
 
 ## Stack
 

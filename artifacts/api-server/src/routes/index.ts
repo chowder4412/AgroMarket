@@ -6,6 +6,8 @@ import commerceRouter from "./commerce";
 import sellerRouter from "./seller";
 import adminRouter from "./admin";
 import quotationsRouter from "./quotations";
+import paymentsRouter from "./payments";
+import disputesRouter from "./disputes";
 
 const router: IRouter = Router();
 
@@ -16,5 +18,7 @@ router.use(commerceRouter);
 router.use(sellerRouter);
 router.use(adminRouter);
 router.use(quotationsRouter);
+router.use(paymentsRouter);
+router.use(disputesRouter);
 
 export default router;

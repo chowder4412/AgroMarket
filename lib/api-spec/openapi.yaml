@@ -294,6 +294,42 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Order" }
+  /orders/disputes:
+    get:
+      operationId: listBuyerDisputes
+      tags: [orders]
+      summary: List disputes opened by the signed-in buyer
+      responses:
+        "200":
+          description: Buyer disputes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OrderDispute" }
+  /orders/{id}/disputes:
+    post:
+      operationId: createOrderDispute
+      tags: [orders]
+      summary: Open a dispute for one of the buyer's orders
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderDisputeInput" }
+      responses:
+        "201":
+          description: Dispute opened
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDispute" }
+        "404": { description: Eligible order not found }
+        "409": { description: A dispute already exists for this order }
   /seller/dashboard:
     get:
       operationId: getSellerDashboard
@@ -350,6 +386,40 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VerificationCase" }
+  /admin/disputes:
+    get:
+      operationId: listAdminDisputes
+      tags: [admin]
+      summary: List marketplace order disputes
+      responses:
+        "200":
+          description: Disputes for admin review
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OrderDispute" }
+  /admin/disputes/{id}:
+    patch:
+      operationId: updateOrderDispute
+      tags: [admin]
+      summary: Review or resolve an order dispute
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderDisputeUpdate" }
+      responses:
+        "200":
+          description: Updated dispute
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDispute" }
   /seller/orders/{id}/status:
     patch:
       operationId: updateSellerOrderStatus
@@ -396,6 +466,67 @@ paths:
       responses:
         "201":
           description: Quotation request created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quotation" }
+  /seller/quotations:
+    get:
+      operationId: listSellerQuotations
+      tags: [seller, quotations]
+      summary: List bulk quote requests containing this seller's products
+      responses:
+        "200":
+          description: Requests for this seller
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Quotation" }
+  /seller/quotations/{id}/response:
+    post:
+      operationId: respondToQuotation
+      tags: [seller, quotations]
+      summary: Submit or update this seller's quote for a bulk request
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuotationResponseInput" }
+      responses:
+        "200":
+          description: Seller quote saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotationResponse" }
+        "404": { description: Quote request not found for this seller }
+        "409": { description: Quote request is already closed }
+  /quotations/{id}/responses/{responseId}:
+    patch:
+      operationId: updateQuotationResponse
+      tags: [quotations]
+      summary: Accept or decline a seller's quote response
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+        - in: path
+          name: responseId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuotationResponseUpdate" }
+      responses:
+        "200":
+          description: Seller response decision saved
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Quotation" }
@@ -585,6 +716,7 @@ components:
       properties:
         deliveryAddress: { type: string, minLength: 8 }
         paymentMode: { type: string, enum: [sandbox, paystack] }
+        email: { type: string, format: email }
       required: [deliveryAddress, paymentMode]
     PaymentMethods:
       type: object
@@ -669,6 +801,39 @@ components:
           minItems: 1
           items: { $ref: "#/components/schemas/QuotationLineInput" }
       required: [businessName, notes, items]
+    QuotationItem:
+      type: object
+      properties:
+        quotationItemId: { type: integer }
+        productId: { type: integer }
+        name: { type: string }
+        unit: { $ref: "#/components/schemas/ProductUnit" }
+        unitPrice: { type: number }
+        quantity: { type: integer }
+        sellerName: { type: string }
+      required: [quotationItemId, productId, name, unit, unitPrice, quantity, sellerName]
+    QuotationResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        sellerName: { type: string }
+        status: { type: string, enum: [quoted, accepted, declined] }
+        totalNgn: { type: [integer, "null"] }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, sellerName, status, totalNgn, message, createdAt]
+    QuotationResponseInput:
+      type: object
+      properties:
+        status: { type: string, enum: [quoted, declined] }
+        totalNgn: { type: integer, minimum: 1 }
+        message: { type: string, maxLength: 1000 }
+      required: [status, message]
+    QuotationResponseUpdate:
+      type: object
+      properties:
+        status: { type: string, enum: [accepted, declined] }
+      required: [status]
     Quotation:
       type: object
       properties:
@@ -679,6 +844,35 @@ components:
         createdAt: { type: string, format: date-time }
         items:
           type: array
-          items: { $ref: "#/components/schemas/OrderItem" }
-      required: [id, businessName, status, notes, createdAt, items]
+          items: { $ref: "#/components/schemas/QuotationItem" }
+        responses:
+          type: array
+          items: { $ref: "#/components/schemas/QuotationResponse" }
+      required: [id, businessName, status, notes, createdAt, items, responses]
+    OrderDispute:
+      type: object
+      properties:
+        id: { type: integer }
+        orderId: { type: integer }
+        orderNumber: { type: string }
+        sellerName: { type: string }
+        buyerName: { type: string }
+        reason: { type: string }
+        details: { type: string }
+        status: { type: string, enum: [open, reviewing, resolved, rejected] }
+        resolutionNote: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, orderId, orderNumber, sellerName, buyerName, reason, details, status, resolutionNote, createdAt]
+    OrderDisputeInput:
+      type: object
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 120 }
+        details: { type: string, minLength: 8, maxLength: 4000 }
+      required: [reason, details]
+    OrderDisputeUpdate:
+      type: object
+      properties:
+        status: { type: string, enum: [reviewing, resolved, rejected] }
+        resolutionNote: { type: string, maxLength: 2000 }
+      required: [status, resolutionNote]
 

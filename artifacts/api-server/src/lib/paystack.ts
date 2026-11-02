@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import {
   checkoutPaymentsTable,
@@ -9,17 +8,22 @@ import {
   paymentWebhookEventsTable,
   paymentsTable,
 } from "@workspace/db";
+import {
+  isPaystackConfigured,
+  matchesExpectedPayment,
+  verifyPaystackSignature,
+  type PaystackTransaction,
+} from "./paystack-security";
+
+export {
+  isPaystackConfigured,
+  matchesExpectedPayment,
+  verifyPaystackSignature,
+} from "./paystack-security";
+export type { PaystackTransaction } from "./paystack-security";
 
 const PAYSTACK_API = "https://api.paystack.co";
 const RESERVATION_MINUTES = 15;
-
-export interface PaystackTransaction {
-  id: string | number;
-  status: string;
-  reference: string;
-  amount: number;
-  currency: string;
-}
 
 function paystackSecret(): string | null {
   const secret = process.env.PAYSTACK_SECRET_KEY?.trim();
@@ -111,30 +115,6 @@ export async function verifyPaystackTransaction(
     amount: data.amount,
     currency: data.currency,
   };
-}
-
-export function verifyPaystackSignature(
-  rawBody: Buffer | undefined,
-  signature: string | undefined,
-): boolean {
-  const secret = paystackSecret();
-  if (!secret || !rawBody || !signature || !/^[a-f0-9]{128}$/i.test(signature)) {
-    return false;
-  }
-  const expected = createHmac("sha512", secret).update(rawBody).digest();
-  const supplied = Buffer.from(signature, "hex");
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-
-function matchesExpectedPayment(
-  expected: { reference: string; amountNgn: number },
-  transaction: PaystackTransaction,
-): boolean {
-  return (
-    transaction.reference === expected.reference &&
-    transaction.currency === "NGN" &&
-    transaction.amount === expected.amountNgn * 100
-  );
 }
 
 async function updatePaymentGroup(

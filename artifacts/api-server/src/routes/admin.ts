@@ -4,11 +4,13 @@ import {
   count,
   desc,
   eq,
+  inArray,
   sql,
 } from "drizzle-orm";
 import {
   db,
   farmsTable,
+  orderDisputesTable,
   paymentsTable,
   productsTable,
   sellerProfilesTable,
@@ -49,12 +51,16 @@ router.get(
       })
       .from(paymentsTable)
       .where(eq(paymentsTable.status, "paid"));
+    const [{ count: openDisputes }] = await db
+      .select({ count: count(orderDisputesTable.id) })
+      .from(orderDisputesTable)
+      .where(inArray(orderDisputesTable.status, ["open", "reviewing"]));
     res.json(
       GetAdminDashboardResponse.parse({
         pendingVerifications,
         activeListings,
         flaggedPayments,
-        openDisputes: 0,
+        openDisputes,
         grossMerchandiseValueNgn: Number(grossMerchandiseValueNgn),
       }),
     );

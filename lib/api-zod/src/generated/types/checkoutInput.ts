@@ -11,4 +11,5 @@ export interface CheckoutInput {
   /** @minLength 8 */
   deliveryAddress: string;
   paymentMode: CheckoutInputPaymentMode;
+  email?: string;
 }

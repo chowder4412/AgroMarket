@@ -245,6 +245,7 @@ export interface CheckoutInput {
   /** @minLength 8 */
   deliveryAddress: string;
   paymentMode: CheckoutInputPaymentMode;
+  email?: string;
 }
 
 export interface PaymentMethods {
@@ -352,6 +353,63 @@ export interface QuotationInput {
   items: QuotationLineInput[];
 }
 
+export interface QuotationItem {
+  quotationItemId: number;
+  productId: number;
+  name: string;
+  unit: ProductUnit;
+  unitPrice: number;
+  quantity: number;
+  sellerName: string;
+}
+
+export type QuotationResponseStatus = typeof QuotationResponseStatus[keyof typeof QuotationResponseStatus];
+
+
+export const QuotationResponseStatus = {
+  quoted: 'quoted',
+  accepted: 'accepted',
+  declined: 'declined',
+} as const;
+
+export interface QuotationResponse {
+  id: number;
+  sellerName: string;
+  status: QuotationResponseStatus;
+  /** @nullable */
+  totalNgn: number | null;
+  message: string;
+  createdAt: string;
+}
+
+export type QuotationResponseInputStatus = typeof QuotationResponseInputStatus[keyof typeof QuotationResponseInputStatus];
+
+
+export const QuotationResponseInputStatus = {
+  quoted: 'quoted',
+  declined: 'declined',
+} as const;
+
+export interface QuotationResponseInput {
+  status: QuotationResponseInputStatus;
+  /** @minimum 1 */
+  totalNgn?: number;
+  /** @maxLength 1000 */
+  message: string;
+}
+
+export type QuotationResponseUpdateStatus = typeof QuotationResponseUpdateStatus[keyof typeof QuotationResponseUpdateStatus];
+
+
+export const QuotationResponseUpdateStatus = {
+  accepted: 'accepted',
+  declined: 'declined',
+} as const;
+
+export interface QuotationResponseUpdate {
+  status: QuotationResponseUpdateStatus;
+}
+
 export type QuotationStatus = typeof QuotationStatus[keyof typeof QuotationStatus];
 
 
@@ -368,7 +426,59 @@ export interface Quotation {
   status: QuotationStatus;
   notes: string;
   createdAt: string;
-  items: OrderItem[];
+  items: QuotationItem[];
+  responses: QuotationResponse[];
+}
+
+export type OrderDisputeStatus = typeof OrderDisputeStatus[keyof typeof OrderDisputeStatus];
+
+
+export const OrderDisputeStatus = {
+  open: 'open',
+  reviewing: 'reviewing',
+  resolved: 'resolved',
+  rejected: 'rejected',
+} as const;
+
+export interface OrderDispute {
+  id: number;
+  orderId: number;
+  orderNumber: string;
+  sellerName: string;
+  buyerName: string;
+  reason: string;
+  details: string;
+  status: OrderDisputeStatus;
+  resolutionNote: string;
+  createdAt: string;
+}
+
+export interface OrderDisputeInput {
+  /**
+     * @minLength 3
+     * @maxLength 120
+     */
+  reason: string;
+  /**
+     * @minLength 8
+     * @maxLength 4000
+     */
+  details: string;
+}
+
+export type OrderDisputeUpdateStatus = typeof OrderDisputeUpdateStatus[keyof typeof OrderDisputeUpdateStatus];
+
+
+export const OrderDisputeUpdateStatus = {
+  reviewing: 'reviewing',
+  resolved: 'resolved',
+  rejected: 'rejected',
+} as const;
+
+export interface OrderDisputeUpdate {
+  status: OrderDisputeUpdateStatus;
+  /** @maxLength 2000 */
+  resolutionNote: string;
 }
 
 export type ListProductsParams = {

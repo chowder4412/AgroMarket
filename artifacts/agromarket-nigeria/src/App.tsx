@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react';
-import { ClerkProvider, Show, SignIn, SignUp, useClerk, useUser } from '@clerk/react';
+import { ClerkProvider, Show, SignIn, SignUp, useAuth, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import {
   getGetAccountQueryKey, getGetAdminDashboardQueryKey, getGetCartQueryKey, getGetProductQueryKey, getGetSellerDashboardQueryKey,
-  getListOrdersQueryKey, getListProductsQueryKey, getListQuotationsQueryKey,
-  getListSellerVerificationsQueryKey, useAddCartItem, useCheckout, useCreateProduct,
+  getGetPaymentMethodsQueryKey, getListAdminDisputesQueryKey, getListBuyerDisputesQueryKey, getListOrdersQueryKey, getListProductsQueryKey, getListQuotationsQueryKey,
+  getListSellerQuotationsQueryKey, getListSellerVerificationsQueryKey, useAddCartItem, useCheckout, useCreateProduct,
   useCreateQuotation, useGetCart, useGetProduct, useGetSellerDashboard,
-  useGetAccount, useGetAdminDashboard, useHealthCheck, useListFeaturedFarms, useListOrders,
-  useListProducts, useListQuotations, useListSellerVerifications, useRemoveCartItem,
-  useRequestAccountRole, useUpdateCartItem, useUpdateProduct, useUpdateSellerOrderStatus,
+  useGetAccount, useGetAdminDashboard, useGetPaymentMethods, useHealthCheck, useListFeaturedFarms, useListOrders,
+  useListAdminDisputes, useListBuyerDisputes, useListProducts, useListQuotations, useListSellerQuotations, useListSellerVerifications, useRemoveCartItem,
+  useCreateOrderDispute, useRequestAccountRole, useRespondToQuotation, useUpdateCartItem, useUpdateOrderDispute, useUpdateProduct, useUpdateQuotationResponse, useUpdateSellerOrderStatus, useVerifyPaystackPayment,
   useUpdateSellerVerification,
+  setAuthTokenGetter, setBaseUrl,
 } from '@workspace/api-client-react';
-import type { CheckoutInput, Product, ProductCategory, ProductInput, ProductTier, ProductUnit } from '@workspace/api-client-react';
+import type { CheckoutInput, PaymentVerification, Product, ProductCategory, ProductInput, ProductTier, ProductUnit } from '@workspace/api-client-react';
 import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useParams } from 'wouter';
 import {
   ArrowDown, ArrowLeft, ArrowRight, BadgeCheck, Box, Check, CircleHelp,
@@ -24,6 +25,8 @@ import NotFound from '@/pages/not-found';
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() || null;
+setBaseUrl(apiBaseUrl);
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 
@@ -244,13 +247,29 @@ function ShoppingBasketIcon() { return <span className="mx-auto grid size-14 pla
 function CheckoutPage() {
   const cart = useGetCart({ query: { queryKey: getGetCartQueryKey(), retry: false } });
   const checkout = useCheckout();
+  const methods = useGetPaymentMethods({ query: { queryKey: getGetPaymentMethodsQueryKey(), retry: false } });
+  const { user } = useUser();
   const [address, setAddress] = useState('');
+  const [email, setEmail] = useState('');
+  const [paymentMode, setPaymentMode] = useState<CheckoutInput['paymentMode']>('sandbox');
   const [order, setOrder] = useState<Awaited<ReturnType<typeof checkout.mutateAsync>> | null>(null);
   const client = useQueryClient();
+  useEffect(() => {
+    const primaryEmail = user?.primaryEmailAddress?.emailAddress;
+    if (primaryEmail) setEmail(primaryEmail);
+  }, [user?.primaryEmailAddress?.emailAddress]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    checkout.mutate({ data: { deliveryAddress: address, paymentMode: 'sandbox' as CheckoutInput['paymentMode'] } }, {
-      onSuccess: (created) => { setOrder(created); client.invalidateQueries({ queryKey: getGetCartQueryKey() }); client.invalidateQueries({ queryKey: getListOrdersQueryKey() }); },
+    checkout.mutate({ data: { deliveryAddress: address, paymentMode, ...(paymentMode === 'paystack' ? { email } : {}) } }, {
+      onSuccess: (created) => {
+        if (created.status === 'pending' && created.authorizationUrl) {
+          window.location.assign(created.authorizationUrl);
+          return;
+        }
+        setOrder(created);
+        client.invalidateQueries({ queryKey: getGetCartQueryKey() });
+        client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      },
     });
   };
   if (order) return <main className="shell page-enter py-10 md:py-16"><div className="mx-auto max-w-3xl rounded-[28px] border border-border bg-card p-6 sm:p-9"><div className="text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-primary"><Check size={30} /></span><p className="mt-5 text-xs font-bold uppercase tracking-[.18em] text-primary">Demo checkout complete</p><h1 className="serif mt-2 text-4xl">Your orders are in the books.</h1><p className="mt-3 text-muted-foreground">Order group <strong data-testid="text-order-group-number">{order.orderGroupNumber}</strong></p><p className="mt-2 text-sm text-muted-foreground">Combined order total <strong className="text-foreground" data-testid="text-checkout-grand-total">{money(order.grandTotal)}</strong></p></div><div className="mt-6 rounded-xl border border-[#d8b88d] bg-[#fff5e5] p-4 text-sm text-[#644b2d]" data-testid="notice-sandbox-payment"><p className="font-bold">Payment simulation: sandbox / demo only</p><p className="mt-1">No money was charged. This creates test order records only; no live payment was processed.</p></div><section className="mt-8"><div className="mb-3 flex items-center justify-between"><h2 className="serif text-2xl">Seller orders</h2><span className="text-xs text-muted-foreground">{order.orders.length} seller{order.orders.length === 1 ? '' : 's'}</span></div><div className="space-y-3">{order.orders.map((sellerOrder) => <article key={sellerOrder.id} className="rounded-2xl border border-border bg-background p-4" data-testid={`card-checkout-order-${sellerOrder.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.15em] text-primary">{sellerOrder.sellerName}</p><p className="mt-1 font-bold" data-testid={`text-checkout-order-number-${sellerOrder.id}`}>{sellerOrder.orderNumber}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold" data-testid={`status-checkout-order-${sellerOrder.id}`}>{pretty(sellerOrder.status)}</span></div><div className="mt-3 space-y-1 border-t border-border pt-3">{sellerOrder.items.map((item, index) => <p key={`${sellerOrder.id}-${item.productId}-${index}`} className="flex justify-between gap-3 text-sm"><span>{item.quantity} × {item.name}</span><span className="text-muted-foreground">{money(item.unitPrice * item.quantity)}</span></p>)}</div><div className="mt-3 flex justify-between border-t border-border pt-3 text-sm"><span className="text-muted-foreground">Seller order total</span><strong>{money(sellerOrder.total)}</strong></div></article>)}</div></section><div className="mt-7 flex flex-wrap justify-center gap-3"><Link href="/orders" className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 font-bold text-primary-foreground" data-testid="link-view-orders">View your orders <ArrowRight size={16} /></Link><Link href="/" className="inline-flex items-center rounded-full border border-border px-6 py-3 text-sm font-bold" data-testid="link-return-market-checkout">Return to market</Link></div></div></main>;
@@ -258,17 +277,108 @@ function CheckoutPage() {
     <div className="grid items-start gap-8 lg:grid-cols-[1fr_360px]"><form onSubmit={submit} className="space-y-6 rounded-[24px] border border-border bg-card p-5 sm:p-7">
       <div className="flex gap-3 rounded-xl border border-[#d8b88d] bg-[#fff5e5] p-4 text-sm text-[#644b2d]"><CircleHelp size={19} className="mt-0.5 shrink-0" /><div><strong>Sandbox / demo checkout</strong><p className="mt-1">No money is charged. This creates a pending test order only.</p></div></div>
       <label className="block"><span className="mb-2 block text-sm font-bold">Delivery address</span><textarea required minLength={8} rows={4} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="House number, street, area, city and state" className="w-full resize-y rounded-xl border border-input bg-background px-4 py-3 outline-none focus:ring-2 focus:ring-primary/30" data-testid="input-delivery-address" /></label>
-      <div className="rounded-xl bg-secondary/60 p-4"><p className="text-sm font-bold">Payment mode</p><p className="mt-1 text-sm text-muted-foreground">Sandbox demo — no live payment method is connected.</p></div>
+      <fieldset className="space-y-3"><legend className="mb-2 text-sm font-bold">Payment method</legend>
+        <label className={`flex cursor-pointer gap-3 rounded-xl border p-4 ${paymentMode === 'sandbox' ? 'border-primary bg-[#edf3e8]' : 'border-border'}`}><input type="radio" name="payment-mode" value="sandbox" checked={paymentMode === 'sandbox'} onChange={() => setPaymentMode('sandbox')} /><span><strong className="block text-sm">Sandbox demo</strong><span className="mt-1 block text-xs text-muted-foreground">Test order only. No money is charged.</span></span></label>
+        <label className={`flex gap-3 rounded-xl border p-4 ${methods.data?.paystackAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'} ${paymentMode === 'paystack' ? 'border-primary bg-[#edf3e8]' : 'border-border'}`}><input type="radio" name="payment-mode" value="paystack" checked={paymentMode === 'paystack'} disabled={!methods.data?.paystackAvailable} onChange={() => setPaymentMode('paystack')} /><span><strong className="block text-sm">Pay online with Paystack</strong><span className="mt-1 block text-xs text-muted-foreground">{methods.isLoading ? 'Checking availability…' : methods.data?.paystackAvailable ? 'Secure NGN checkout.' : 'Unavailable until the server is configured.'}</span></span></label>
+      </fieldset>
+      {paymentMode === 'paystack' && <Field label="Payment email" value={email} onChange={setEmail} type="email" required testId="input-payment-email" placeholder="you@example.com" />}
       {checkout.isError && <Notice>We couldn't create the demo order. Please check your address and try again.</Notice>}
-      <Button type="submit" disabled={checkout.isPending || !address.trim() || cart.isLoading || !cart.data?.items?.length} className="w-full bg-primary text-primary-foreground hover:bg-[#214b37]" data-testid="button-place-sandbox-order">{checkout.isPending ? 'Creating demo order…' : 'Create sandbox order'} <ArrowRight size={16} /></Button>
+      {methods.isError && <Notice>Payment options could not be loaded. Sandbox remains available.</Notice>}
+      <Button type="submit" disabled={checkout.isPending || !address.trim() || (paymentMode === 'paystack' && !email.trim()) || cart.isLoading || !cart.data?.items?.length} className="w-full bg-primary text-primary-foreground hover:bg-[#214b37]" data-testid="button-place-sandbox-order">{checkout.isPending ? 'Starting checkout…' : paymentMode === 'paystack' ? 'Continue to Paystack' : 'Create sandbox order'} <ArrowRight size={16} /></Button>
     </form><aside className="rounded-[24px] border border-border bg-card p-5"><h2 className="serif text-2xl">Your basket</h2>{cart.isLoading ? <Skeleton className="mt-4 h-20" /> : cart.isError ? <Notice>Sign in to load your basket. <Link href="/sign-in" className="underline" data-testid="link-checkout-sign-in">Sign in</Link></Notice> : cart.data?.items?.length ? <><div className="mt-4 space-y-3">{cart.data.items.map((item) => <div key={item.id} className="flex justify-between gap-3 text-sm" data-testid={`text-checkout-item-${item.id}`}><span>{item.quantity} × {item.name}</span><span className="font-semibold">{money(item.unitPrice * item.quantity)}</span></div>)}</div><div className="mt-5 flex justify-between border-t border-border pt-4 font-bold"><span>Subtotal</span><span>{money(cart.data.subtotal)}</span></div></> : <p className="mt-4 text-sm text-muted-foreground">Your basket is empty.</p>}</aside></div>
   </main>;
 }
 
+function PaystackReturnPage() {
+  const verify = useVerifyPaystackPayment();
+  const [payment, setPayment] = useState<PaymentVerification | null>(null);
+  const [reference] = useState(() => new URLSearchParams(window.location.search).get('reference') || '');
+  const client = useQueryClient();
+  const verifyPayment = () => {
+    if (!reference) return;
+    verify.mutate({ data: { reference } }, {
+      onSuccess: (result) => {
+        setPayment(result);
+        client.invalidateQueries({ queryKey: getGetCartQueryKey() });
+        client.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      },
+    });
+  };
+  useEffect(() => { verifyPayment(); }, [reference]);
+  const status = payment?.status;
+  return <main className="shell page-enter py-12 md:py-16"><section className="mx-auto max-w-2xl rounded-[24px] border border-border bg-card p-6 text-center sm:p-9">
+    <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Paystack checkout</p>
+    <h1 className="serif mt-3 text-4xl">{verify.isPending ? 'Confirming your payment' : status === 'paid' ? 'Payment confirmed' : status === 'failed' ? 'Payment not completed' : 'Payment status'}</h1>
+    {verify.isPending && <p className="mt-3 text-sm text-muted-foreground">Please keep this page open while we verify the transaction with Paystack.</p>}
+    {verify.isError && <div className="mt-5"><Notice>We could not confirm the payment yet. You can safely retry verification.</Notice></div>}
+    {!reference && <div className="mt-5"><Notice>No payment reference was returned. Check your orders before trying checkout again.</Notice></div>}
+    {status === 'pending' && <div className="mt-5"><Notice tone="info">Paystack has not confirmed this payment yet. Your reserved stock will be released automatically if payment expires.</Notice></div>}
+    {status === 'failed' && <div className="mt-5"><Notice>Paystack reported that this payment failed or was abandoned. No order was marked paid.</Notice></div>}
+    {payment && <p className="mt-5 text-sm text-muted-foreground">Order group <strong className="text-foreground">{payment.orderGroupNumber}</strong> · {money(payment.grandTotal)}</p>}
+    <div className="mt-7 flex flex-wrap justify-center gap-3"><button type="button" onClick={verifyPayment} disabled={!reference || verify.isPending} className="rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50" data-testid="button-retry-payment-verification">Verify again</button><Link href="/orders" className="inline-flex items-center rounded-full border border-border px-5 py-3 text-sm font-bold" data-testid="link-paystack-orders">View orders</Link><Link href="/" className="inline-flex items-center rounded-full border border-border px-5 py-3 text-sm font-bold" data-testid="link-paystack-market">Return to market</Link></div>
+  </section></main>;
+}
+
 function OrdersPage() {
   const orders = useListOrders({ query: { queryKey: getListOrdersQueryKey(), retry: false } });
-  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Your market trail" title="Orders" description="Keep an eye on what is on its way from the farms and suppliers you chose." />
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Your market trail" title="Orders" description="Keep an eye on what is on its way from the farms and suppliers you chose." action={<Link href="/orders/disputes" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary" data-testid="link-order-support">Order support <CircleHelp size={16} /></Link>} />
     {orders.isLoading ? <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-28" />)}</div> : orders.isError ? <Notice>Sign in to see your orders. <Link href="/sign-in" className="ml-2 font-bold underline" data-testid="link-orders-sign-in">Sign in</Link></Notice> : !orders.data?.length ? <div className="rounded-[26px] border border-dashed border-border bg-card p-12 text-center"><PackageCheck className="mx-auto text-primary" size={32} /><h2 className="serif mt-4 text-3xl">Your next good find is out there.</h2><p className="mt-2 text-sm text-muted-foreground">When you place an order, it will show up here.</p><Link href="/" className="mt-5 inline-flex rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground" data-testid="link-shop-from-orders">Explore the market</Link></div> : <div className="space-y-4">{orders.data.map((order) => <article key={order.id} className="rounded-[22px] border border-border bg-card p-5" data-testid={`card-order-${order.id}`}><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4"><div><p className="text-xs text-muted-foreground">{new Date(order.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p><h2 className="mt-1 font-bold" data-testid={`text-order-number-${order.id}`}>{order.orderNumber}</h2></div><span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold" data-testid={`status-order-${order.id}`}>{pretty(order.status)}</span></div><div className="grid gap-4 pt-4 sm:grid-cols-[1fr_auto]"><div>{order.items.map((item, index) => <p key={`${item.productId}-${index}`} className="mb-1 text-sm">{item.quantity} × {item.name} <span className="text-muted-foreground">from {item.sellerName}</span></p>)}<p className="mt-3 flex items-center gap-1 text-xs text-muted-foreground"><MapPin size={12} />{order.deliveryAddress}</p></div><div className="text-right"><p className="text-xs text-muted-foreground">Order total</p><p className="text-xl font-bold" data-testid={`text-order-total-${order.id}`}>{money(order.total)}</p><p className="mt-2 text-xs text-muted-foreground">{pretty(order.paymentStatus)} · {pretty(order.paymentMode)}</p></div></div></article>)}</div>}
+  </main>;
+}
+
+function OrderDisputesPage() {
+  const orders = useListOrders({ query: { queryKey: getListOrdersQueryKey(), retry: false } });
+  const disputes = useListBuyerDisputes({ query: { queryKey: getListBuyerDisputesQueryKey(), retry: false } });
+  const create = useCreateOrderDispute();
+  const client = useQueryClient();
+  const [forms, setForms] = useState<Record<number, { reason: string; details: string }>>({});
+  const disputesByOrder = new Map((disputes.data || []).map((dispute) => [dispute.orderId, dispute]));
+  const submit = (orderId: number) => {
+    const form = forms[orderId];
+    if (!form) return;
+    create.mutate({ id: orderId, data: form }, {
+      onSuccess: () => {
+        client.invalidateQueries({ queryKey: getListBuyerDisputesQueryKey() });
+        client.invalidateQueries({ queryKey: getGetAdminDashboardQueryKey() });
+      },
+    });
+  };
+  const eligibleOrders = orders.data?.filter((order) => order.paymentStatus === 'paid' && order.status !== 'cancelled') || [];
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Buyer support" title="Order issues" description="Open a case for a paid order. The platform team will review it and record a resolution." action={<Link href="/orders" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary"><ArrowLeft size={16} />Back to orders</Link>} />
+    {orders.isLoading || disputes.isLoading ? <Skeleton className="h-40" /> : orders.isError || disputes.isError ? <Notice>Sign in to review orders and disputes. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !eligibleOrders.length ? <div className="rounded-2xl border border-dashed border-border bg-card p-9 text-center text-sm text-muted-foreground">Paid orders eligible for support will appear here.</div> : <div className="space-y-4">{eligibleOrders.map((order) => {
+      const dispute = disputesByOrder.get(order.id);
+      const form = forms[order.id] || { reason: 'item_not_received', details: '' };
+      return <article key={order.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-order-dispute-${order.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-muted-foreground">{order.sellerName}</p><h2 className="mt-1 font-bold">{order.orderNumber}</h2><p className="mt-1 text-sm text-muted-foreground">{money(order.total)} · {pretty(order.status)}</p></div>{dispute && <span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold" data-testid={`status-buyer-dispute-${dispute.id}`}>{pretty(dispute.status)}</span>}</div>
+        {dispute ? <div className="mt-4 rounded-xl bg-secondary/40 p-4 text-sm"><p><strong>{pretty(dispute.reason)}</strong> · {dispute.details}</p>{dispute.resolutionNote && <p className="mt-2 text-muted-foreground">Platform note: {dispute.resolutionNote}</p>}</div> : <form onSubmit={(event) => { event.preventDefault(); submit(order.id); }} className="mt-4 grid gap-3 sm:grid-cols-[220px_1fr_auto] sm:items-end"><label className="block"><span className="mb-2 block text-sm font-bold">Issue type</span><select value={form.reason} onChange={(event) => setForms((current) => ({ ...current, [order.id]: { ...form, reason: event.target.value } }))} className="h-12 w-full rounded-xl border border-input bg-background px-3" data-testid={`select-dispute-reason-${order.id}`}><option value="item_not_received">Order not received</option><option value="damaged_items">Damaged items</option><option value="wrong_items">Wrong items</option><option value="quantity_issue">Quantity issue</option><option value="other">Other</option></select></label><label className="block"><span className="mb-2 block text-sm font-bold">What happened?</span><textarea required minLength={8} maxLength={4000} rows={2} value={form.details} onChange={(event) => setForms((current) => ({ ...current, [order.id]: { ...form, details: event.target.value } }))} className="w-full rounded-xl border border-input bg-background px-3 py-2" data-testid={`input-dispute-details-${order.id}`} /></label><Button type="submit" disabled={create.isPending || form.details.trim().length < 8} className="h-12 bg-primary px-4 text-xs text-primary-foreground" data-testid={`button-open-dispute-${order.id}`}>Open case</Button></form>}
+      </article>;
+    })}</div>}
+    {create.isError && <div className="mt-4"><Notice>We couldn't open that case. Check whether a dispute already exists for the order.</Notice></div>}
+  </main>;
+}
+
+function AdminDisputesPage() {
+  const disputes = useListAdminDisputes({ query: { queryKey: getListAdminDisputesQueryKey(), retry: false } });
+  const update = useUpdateOrderDispute();
+  const client = useQueryClient();
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [statuses, setStatuses] = useState<Record<number, 'reviewing' | 'resolved' | 'rejected'>>({});
+  const save = (id: number, fallback: 'reviewing' | 'resolved' | 'rejected') => update.mutate({ id, data: { status: statuses[id] || fallback, resolutionNote: notes[id] || '' } }, {
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: getListAdminDisputesQueryKey() });
+      client.invalidateQueries({ queryKey: getGetAdminDashboardQueryKey() });
+      client.invalidateQueries({ queryKey: getListBuyerDisputesQueryKey() });
+    },
+  });
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Platform operations" title="Order dispute desk" description="Review buyer reports and record the platform decision." action={<Link href="/admin" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary"><ArrowLeft size={16} />Admin overview</Link>} />
+    {disputes.isLoading ? <Skeleton className="h-40" /> : disputes.isError ? <Notice>Sign in with an admin account to review disputes. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !disputes.data?.length ? <div className="rounded-2xl border border-dashed border-border bg-card p-9 text-center text-sm text-muted-foreground">No disputes have been opened.</div> : <div className="space-y-4">{disputes.data.map((dispute) => {
+      const terminal = dispute.status === 'resolved' || dispute.status === 'rejected';
+      const fallback = dispute.status === 'open' ? 'reviewing' : 'resolved';
+      return <article key={dispute.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-admin-dispute-${dispute.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-muted-foreground">{dispute.orderNumber} · {dispute.sellerName}</p><h2 className="serif mt-1 text-2xl">{pretty(dispute.reason)}</h2></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(dispute.status)}</span></div><p className="mt-3 text-sm">{dispute.details}</p><p className="mt-2 text-xs text-muted-foreground">Buyer: {dispute.buyerName} · Opened {new Date(dispute.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p>
+        {dispute.resolutionNote && <p className="mt-3 rounded-xl bg-secondary/40 p-3 text-sm">Decision note: {dispute.resolutionNote}</p>}
+        {!terminal && <form onSubmit={(event) => { event.preventDefault(); save(dispute.id, fallback); }} className="mt-4 grid gap-3 sm:grid-cols-[190px_1fr_auto] sm:items-end"><label className="block"><span className="mb-2 block text-sm font-bold">Next status</span><select value={statuses[dispute.id] || fallback} onChange={(event) => setStatuses((current) => ({ ...current, [dispute.id]: event.target.value as typeof fallback }))} className="h-12 w-full rounded-xl border border-input bg-background px-3" data-testid={`select-dispute-status-${dispute.id}`}>{dispute.status === 'open' ? <option value="reviewing">Reviewing</option> : <><option value="resolved">Resolved</option><option value="rejected">Rejected</option></>}</select></label><label className="block"><span className="mb-2 block text-sm font-bold">Resolution note</span><textarea required={statuses[dispute.id] !== 'reviewing' && fallback !== 'reviewing'} rows={2} maxLength={2000} value={notes[dispute.id] ?? dispute.resolutionNote} onChange={(event) => setNotes((current) => ({ ...current, [dispute.id]: event.target.value }))} className="w-full rounded-xl border border-input bg-background px-3 py-2" data-testid={`input-dispute-resolution-${dispute.id}`} /></label><Button type="submit" disabled={update.isPending} className="h-12 bg-primary px-4 text-xs text-primary-foreground" data-testid={`button-save-dispute-${dispute.id}`}>Save decision</Button></form>}
+      </article>;
+    })}</div>}
+    {update.isError && <div className="mt-4"><Notice>We couldn't save that dispute decision.</Notice></div>}
   </main>;
 }
 
@@ -365,7 +475,7 @@ function QuotationsPage() {
   const addLine = () => { if (!productId || Number(quantity) < 1) return; const pid = Number(productId); setLines((prev) => [...prev.filter((line) => line.productId !== pid), { productId: pid, quantity: Number(quantity) }]); setProductId(''); setQuantity('1'); };
   const submit = (e: FormEvent) => { e.preventDefault(); create.mutate({ data: { businessName, notes, items: lines } }, { onSuccess: () => { setSent(true); setLines([]); setBusinessName(''); setNotes(''); client.invalidateQueries({ queryKey: getListQuotationsQueryKey() }); } }); };
   const lineItems = lines.map((line) => ({ ...line, product: products.data?.find((p) => p.id === line.productId) }));
-  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="For kitchens, shops & makers" title="Buy in a bigger way." description="Tell suppliers what you need and request a quote for your business. No commitment until you agree to a quote." />
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="For kitchens, shops & makers" title="Buy in a bigger way." description="Tell suppliers what you need and request a quote for your business. No commitment until you agree to a quote." action={<Link href="/business/quotations/responses" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary" data-testid="link-quotation-responses">View supplier responses <ArrowRight size={16} /></Link>} />
     <div className="grid items-start gap-8 lg:grid-cols-[1fr_.85fr]"><form onSubmit={submit} className="space-y-5 rounded-[24px] border border-border bg-card p-5 md:p-7">
       <div className="flex items-center gap-3 rounded-xl bg-[#eee8da] p-4 text-sm"><Store size={20} className="text-primary" /><p>Build a list of products and quantities, then send a single request.</p></div>
       <Field label="Business name" value={businessName} onChange={setBusinessName} required testId="input-business-name" placeholder="Your kitchen, shop or company" />
@@ -378,6 +488,54 @@ function QuotationsPage() {
       <Button type="submit" disabled={create.isPending || !businessName.trim() || lines.length === 0} className="w-full bg-primary text-primary-foreground hover:bg-[#214b37]" data-testid="button-submit-quotation">{create.isPending ? 'Sending request…' : 'Send quote request'} <ArrowRight size={16} /></Button>
     </form>
     <section><div className="mb-4"><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Your requests</p><h2 className="serif mt-1 text-3xl">Quote history</h2></div>{quotes.isLoading ? <div className="space-y-3"><Skeleton className="h-24" /><Skeleton className="h-24" /></div> : quotes.isError ? <Notice>Sign in to view your quotation requests. <Link href="/sign-in" className="font-bold underline" data-testid="link-quote-sign-in">Sign in</Link></Notice> : !quotes.data?.length ? <div className="rounded-2xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">Your requests and supplier responses will appear here.</div> : <div className="space-y-3">{quotes.data.map((quote) => <article key={quote.id} className="rounded-2xl border border-border bg-card p-4" data-testid={`card-quotation-${quote.id}`}><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold">{quote.businessName}</h3><p className="mt-1 text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold" data-testid={`status-quotation-${quote.id}`}>{pretty(quote.status)}</span></div><p className="mt-3 text-sm">{quote.items.map((item) => `${item.quantity} × ${item.name}`).join(' · ')}</p>{quote.notes && <p className="mt-2 text-xs text-muted-foreground">{quote.notes}</p>}</article>)}</div>}</section></div>
+  </main>;
+}
+
+function SellerQuotationsPage() {
+  const quotes = useListSellerQuotations({ query: { queryKey: getListSellerQuotationsQueryKey(), retry: false } });
+  const respond = useRespondToQuotation();
+  const client = useQueryClient();
+  const [totals, setTotals] = useState<Record<number, string>>({});
+  const [messages, setMessages] = useState<Record<number, string>>({});
+  const saveResponse = (id: number, status: 'quoted' | 'declined') => {
+    respond.mutate({ id, data: { status, message: messages[id] || '', ...(status === 'quoted' ? { totalNgn: Number(totals[id]) } : {}) } }, {
+      onSuccess: () => client.invalidateQueries({ queryKey: getListSellerQuotationsQueryKey() }),
+    });
+  };
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Seller workspace" title="Bulk quote requests" description="Review requests that include your products and send a firm total or decline them." />
+    {quotes.isLoading ? <Skeleton className="h-40" /> : quotes.isError ? <Notice>Sign in with a seller account to view quote requests. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !quotes.data?.length ? <div className="rounded-2xl border border-dashed border-border bg-card p-10 text-center"><h2 className="serif text-2xl">No requests for your listings yet.</h2><p className="mt-2 text-sm text-muted-foreground">New business requests will appear here.</p></div> : <div className="space-y-4">{quotes.data.map((quote) => {
+      const response = quote.responses[0];
+      const closed = quote.status === 'accepted' || quote.status === 'declined';
+      return <article key={quote.id} className="grid gap-5 rounded-2xl border border-border bg-card p-5 lg:grid-cols-[1fr_320px]" data-testid={`card-seller-quotation-${quote.id}`}>
+        <div><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p><h2 className="serif mt-1 text-2xl">{quote.businessName}</h2></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response?.status || quote.status)}</span></div>
+          {quote.notes && <p className="mt-3 text-sm text-muted-foreground">{quote.notes}</p>}
+          <div className="mt-4 divide-y divide-border rounded-xl border border-border">{quote.items.map((item) => <div key={item.quotationItemId} className="flex flex-wrap justify-between gap-2 px-3 py-2 text-sm"><span>{item.name} · {item.quantity} {item.unit}</span><span className="text-muted-foreground">Listed {money(item.unitPrice)}/{item.unit}</span></div>)}</div>
+          {response?.status === 'quoted' && <p className="mt-3 text-sm">Your quote: <strong>{response.totalNgn === null ? 'Awaiting price' : money(response.totalNgn)}</strong>{response.message && <span className="text-muted-foreground"> · {response.message}</span>}</p>}
+        </div>
+        {!closed && response?.status !== 'accepted' && <form onSubmit={(event) => { event.preventDefault(); saveResponse(quote.id, 'quoted'); }} className="space-y-3 rounded-xl bg-secondary/40 p-4">
+          <Field label="Your total for these items (₦)" value={totals[quote.id] ?? (response?.totalNgn ? String(response.totalNgn) : '')} onChange={(value) => setTotals((current) => ({ ...current, [quote.id]: value }))} type="number" min="1" required testId={`input-quotation-total-${quote.id}`} />
+          <label className="block"><span className="mb-2 block text-sm font-bold">Message to buyer</span><textarea rows={3} value={messages[quote.id] ?? response?.message ?? ''} onChange={(event) => setMessages((current) => ({ ...current, [quote.id]: event.target.value }))} maxLength={1000} className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" data-testid={`input-quotation-message-${quote.id}`} /></label>
+          {respond.isError && <Notice>We couldn't save that quote. Please try again.</Notice>}
+          <div className="flex gap-2"><Button type="submit" disabled={respond.isPending || !Number(totals[quote.id] ?? response?.totalNgn)} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-submit-quotation-${quote.id}`}>Send quote</Button><Button type="button" onClick={() => saveResponse(quote.id, 'declined')} disabled={respond.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-quotation-${quote.id}`}>Decline</Button></div>
+        </form>}
+      </article>;
+    })}</div>}
+  </main>;
+}
+
+function BuyerQuotationResponsesPage() {
+  const quotes = useListQuotations({ query: { queryKey: getListQuotationsQueryKey(), retry: false } });
+  const update = useUpdateQuotationResponse();
+  const client = useQueryClient();
+  const decide = (id: number, responseId: number, status: 'accepted' | 'declined') => update.mutate({ id, responseId, data: { status } }, {
+    onSuccess: () => client.invalidateQueries({ queryKey: getListQuotationsQueryKey() }),
+  });
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Business buying" title="Supplier responses" description="Compare supplier totals and record which offer you want to proceed with." action={<Link href="/business/quotations" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary"><ArrowLeft size={16} />Back to requests</Link>} />
+    {quotes.isLoading ? <Skeleton className="h-40" /> : quotes.isError ? <Notice>Sign in as a business buyer to view supplier responses. <Link href="/sign-in" className="font-bold underline">Sign in</Link></Notice> : !quotes.data?.length ? <p className="text-sm text-muted-foreground">Send a request to receive supplier responses.</p> : <div className="space-y-4">{quotes.data.map((quote) => <article key={quote.id} className="rounded-2xl border border-border bg-card p-5" data-testid={`card-buyer-quotation-${quote.id}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="serif text-2xl">{quote.businessName}</h2><p className="mt-1 text-xs text-muted-foreground">{new Date(quote.createdAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}</p></div><span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(quote.status)}</span></div>
+      <div className="mt-4 space-y-3">{quote.responses.length ? quote.responses.map((response) => <div key={response.id} className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 sm:flex-row sm:items-center" data-testid={`card-quotation-response-${response.id}`}><div className="min-w-0 flex-1"><p className="font-bold">{response.sellerName}</p><p className="mt-1 text-sm">{response.totalNgn === null ? 'Declined' : money(response.totalNgn)}</p>{response.message && <p className="mt-1 text-sm text-muted-foreground">{response.message}</p>}</div><span className="w-fit rounded-full bg-secondary px-3 py-1 text-xs font-bold">{pretty(response.status)}</span>{response.status === 'quoted' && quote.status !== 'accepted' && quote.status !== 'declined' && <div className="flex gap-2"><Button onClick={() => decide(quote.id, response.id, 'accepted')} disabled={update.isPending} className="bg-primary px-4 py-2.5 text-xs text-primary-foreground" data-testid={`button-accept-quotation-${response.id}`}>Accept</Button><Button onClick={() => decide(quote.id, response.id, 'declined')} disabled={update.isPending} className="border border-border bg-card px-4 py-2.5 text-xs" data-testid={`button-decline-response-${response.id}`}>Decline</Button></div>}</div>) : <p className="rounded-xl bg-secondary/40 p-4 text-sm text-muted-foreground">No suppliers have responded yet.</p>}</div>
+      {update.isError && <div className="mt-3"><Notice>We couldn't save that decision. Please try again.</Notice></div>}
+      {quote.status === 'accepted' && <p className="mt-4 rounded-xl bg-[#fff5e5] p-4 text-sm text-[#644b2d]">Your selection is recorded. Confirm delivery terms with the supplier before placing a separate order.</p>}
+    </article>)}</div>}
   </main>;
 }
 
@@ -449,7 +607,7 @@ function AdminDashboardPage() {
     ['Open disputes', dashboard.data.openDisputes, <Clock3 size={18} />],
     ['Gross merchandise value', money(dashboard.data.grossMerchandiseValueNgn), <ArrowDown size={18} />],
   ] : [];
-  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Platform operations" title="Verification desk" description="Review seller applications and keep trust signals current across the marketplace." />
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Platform operations" title="Verification desk" description="Review seller applications and keep trust signals current across the marketplace." action={<Link href="/admin/disputes" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold text-primary" data-testid="link-admin-disputes">Dispute desk <CircleHelp size={16} /></Link>} />
     {dashboard.isLoading ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28" />)}</div> : dashboard.isError ? <Notice>Admin dashboard metrics could not be loaded. Please retry.</Notice> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{metrics.map(([label, value, icon]) => <div key={String(label)} className="rounded-[20px] border border-border bg-card p-4" data-testid={`metric-admin-${String(label).toLowerCase().replaceAll(' ', '-')}`}><span className="grid size-9 place-items-center rounded-xl bg-secondary text-primary">{icon}</span><p className="mt-3 text-xs font-semibold text-muted-foreground">{label}</p><p className="serif mt-1 text-2xl">{value}</p></div>)}</div>}
     <section className="mt-10"><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Trust & safety</p><h2 className="serif mt-1 text-3xl">Seller verification requests</h2></div><span className="text-xs text-muted-foreground">{verifications.data?.filter((entry) => entry.status === 'pending').length ?? 0} awaiting review</span></div>
       {feedback && <div className="mb-4"><Notice tone="success">{feedback}</Notice></div>}
@@ -474,6 +632,7 @@ function LogoutButton() {
 }
 function ClerkQueryClientCacheInvalidator() {
   const { addListener } = useClerk();
+  const { getToken } = useAuth();
   const client = useQueryClient();
   const previous = useRef<string | null | undefined>(undefined);
   useEffect(() => {
@@ -484,13 +643,17 @@ function ClerkQueryClientCacheInvalidator() {
     });
     return unsubscribe;
   }, [addListener, client]);
+  useEffect(() => {
+    setAuthTokenGetter(apiBaseUrl ? () => getToken() : null);
+    return () => setAuthTokenGetter(null);
+  }, [getToken]);
   return null;
 }
 function AccountControls() {
   const { isSignedIn, user } = useUser();
   const account = useGetAccount({ query: { enabled: !!isSignedIn, queryKey: getGetAccountQueryKey(), retry: false } });
   if (!isSignedIn) return null;
-  return <div className="hidden items-center justify-end gap-3 border-b border-border bg-card/70 px-5 py-2 lg:flex"><span className="max-w-36 truncate text-xs font-semibold text-muted-foreground">{user?.firstName || user?.primaryEmailAddress?.emailAddress}</span>{account.data?.roles.includes('admin') && <Link href="/admin" className="text-sm font-semibold text-primary" data-testid="link-admin-dashboard">Admin desk</Link>}<LogoutButton /></div>;
+  return <div className="hidden items-center justify-end gap-3 border-b border-border bg-card/70 px-5 py-2 lg:flex"><span className="max-w-36 truncate text-xs font-semibold text-muted-foreground">{user?.firstName || user?.primaryEmailAddress?.emailAddress}</span>{account.data?.roles.includes('admin') && <Link href="/admin" className="text-sm font-semibold text-primary" data-testid="link-admin-dashboard">Admin desk</Link>}{account.data?.roles.some((role) => role === 'farmer' || role === 'supplier') && <Link href="/seller/quotations" className="text-sm font-semibold text-primary" data-testid="link-seller-quotations">Quote requests</Link>}<LogoutButton /></div>;
 }
 function AppFrame({ children }: { children: ReactNode }) {
   return <><Header /><AccountControls />{children}<Footer /></>;
@@ -501,13 +664,18 @@ function AppRoutes() {
     <Route path="/products/:id" component={() => <AppFrame><ProductDetails /></AppFrame>} />
     <Route path="/cart" component={() => <AppFrame><CartPage /></AppFrame>} />
     <Route path="/checkout" component={() => <AppFrame><CheckoutPage /></AppFrame>} />
+    <Route path="/checkout/paystack/return" component={() => <AppFrame><PaystackReturnPage /></AppFrame>} />
     <Route path="/orders" component={() => <AppFrame><OrdersPage /></AppFrame>} />
+    <Route path="/orders/disputes" component={() => <AppFrame><OrderDisputesPage /></AppFrame>} />
     <Route path="/seller" component={() => <AppFrame><SellerDashboard /></AppFrame>} />
     <Route path="/seller/products/new" component={() => <AppFrame><ProductEditor editing={false} /></AppFrame>} />
     <Route path="/seller/products/:id" component={() => <AppFrame><ProductEditor editing /></AppFrame>} />
     <Route path="/business/quotations" component={() => <AppFrame><QuotationsPage /></AppFrame>} />
+    <Route path="/business/quotations/responses" component={() => <AppFrame><BuyerQuotationResponsesPage /></AppFrame>} />
+    <Route path="/seller/quotations" component={() => <AppFrame><SellerQuotationsPage /></AppFrame>} />
     <Route path="/account/role" component={() => <AppFrame><AccountRolePage /></AppFrame>} />
     <Route path="/admin" component={() => <AppFrame><AdminDashboardPage /></AppFrame>} />
+    <Route path="/admin/disputes" component={() => <AppFrame><AdminDisputesPage /></AppFrame>} />
     <Route path="/sign-in/*?" component={() => <AppFrame><SignInPage /></AppFrame>} />
     <Route path="/sign-up/*?" component={() => <AppFrame><SignUpPage /></AppFrame>} />
     <Route component={NotFound} />
@@ -515,7 +683,6 @@ function AppRoutes() {
 }
 function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
-  if (!clerkPubKey) throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in .env file');
   return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={appearance}
     signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}
     localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to your AgroMarket account' } }, signUp: { start: { title: 'Join AgroMarket', subtitle: 'Buy local. Grow together.' } } }}
@@ -524,6 +691,9 @@ function ClerkProviderWithRoutes() {
   </ClerkProvider>;
 }
 function App() {
+  if (!clerkPubKey) {
+    return <main className="shell grid min-h-screen place-items-center py-12"><section role="alert" className="max-w-xl rounded-2xl border border-border bg-card p-7"><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Setup required</p><h1 className="serif mt-2 text-3xl">Authentication is not configured.</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">Set <code>VITE_CLERK_PUBLISHABLE_KEY</code> in the frontend environment, then restart the development server.</p></section></main>;
+  }
   return <WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter>;
 }
 

@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import { clerkMiddleware } from "@clerk/express";
@@ -12,6 +12,12 @@ import {
 } from "./middlewares/clerkProxyMiddleware";
 
 const app: Express = express();
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
 
 app.use(
   pinoHttp({
@@ -33,8 +39,26 @@ app.use(
   }),
 );
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-app.use(cors({ credentials: true, origin: true }));
-app.use(express.json());
+app.use(
+  cors({
+    credentials: true,
+    origin: (origin, callback) => {
+      callback(
+        null,
+        !origin ||
+          process.env.NODE_ENV !== "production" ||
+          allowedOrigins.has(origin),
+      );
+    },
+  }),
+);
+app.use(
+  express.json({
+    verify: (req, _res, body) => {
+      (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 app.use(
   clerkMiddleware((req) => ({
@@ -46,5 +70,11 @@ app.use(
 );
 
 app.use("/api", router);
+app.use((error: unknown, _req: Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error({ err: error }, "Unhandled API request error");
+  if (!res.headersSent) {
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
 
 export default app;

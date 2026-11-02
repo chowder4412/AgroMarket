@@ -21,3 +21,4 @@ export * from "./identity";
 export * from "./catalog";
 export * from "./commerce";
 export * from "./quotations";
+export * from "./disputes";

@@ -342,7 +342,8 @@ export const checkoutBodyDeliveryAddressMin = 8;
 
 export const CheckoutBody = zod.object({
   "deliveryAddress": zod.string().min(checkoutBodyDeliveryAddressMin),
-  "paymentMode": zod.enum(['sandbox', 'paystack'])
+  "paymentMode": zod.enum(['sandbox', 'paystack']),
+  "email": zod.string().email().optional()
 })
 
 export const CheckoutResponse = zod.object({
@@ -453,6 +454,58 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
 
 
 /**
+ * @summary List disputes opened by the signed-in buyer
+ */
+export const ListBuyerDisputesResponseItem = zod.object({
+  "id": zod.number().int(),
+  "orderId": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "buyerName": zod.string(),
+  "reason": zod.string(),
+  "details": zod.string(),
+  "status": zod.enum(['open', 'reviewing', 'resolved', 'rejected']),
+  "resolutionNote": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListBuyerDisputesResponse = zod.array(ListBuyerDisputesResponseItem)
+
+
+/**
+ * @summary Open a dispute for one of the buyer's orders
+ */
+export const CreateOrderDisputeParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const createOrderDisputeBodyReasonMin = 3;
+export const createOrderDisputeBodyReasonMax = 120;
+
+export const createOrderDisputeBodyDetailsMin = 8;
+export const createOrderDisputeBodyDetailsMax = 4000;
+
+
+
+export const CreateOrderDisputeBody = zod.object({
+  "reason": zod.string().min(createOrderDisputeBodyReasonMin).max(createOrderDisputeBodyReasonMax),
+  "details": zod.string().min(createOrderDisputeBodyDetailsMin).max(createOrderDisputeBodyDetailsMax)
+})
+
+export const CreateOrderDisputeResponse = zod.object({
+  "id": zod.number().int(),
+  "orderId": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "buyerName": zod.string(),
+  "reason": zod.string(),
+  "details": zod.string(),
+  "status": zod.enum(['open', 'reviewing', 'resolved', 'rejected']),
+  "resolutionNote": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
  * @summary Get seller inventory and order summary
  */
 export const GetSellerDashboardResponse = zod.object({
@@ -532,6 +585,54 @@ export const UpdateSellerVerificationResponse = zod.object({
 
 
 /**
+ * @summary List marketplace order disputes
+ */
+export const ListAdminDisputesResponseItem = zod.object({
+  "id": zod.number().int(),
+  "orderId": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "buyerName": zod.string(),
+  "reason": zod.string(),
+  "details": zod.string(),
+  "status": zod.enum(['open', 'reviewing', 'resolved', 'rejected']),
+  "resolutionNote": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListAdminDisputesResponse = zod.array(ListAdminDisputesResponseItem)
+
+
+/**
+ * @summary Review or resolve an order dispute
+ */
+export const UpdateOrderDisputeParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const updateOrderDisputeBodyResolutionNoteMax = 2000;
+
+
+
+export const UpdateOrderDisputeBody = zod.object({
+  "status": zod.enum(['reviewing', 'resolved', 'rejected']),
+  "resolutionNote": zod.string().max(updateOrderDisputeBodyResolutionNoteMax)
+})
+
+export const UpdateOrderDisputeResponse = zod.object({
+  "id": zod.number().int(),
+  "orderId": zod.number().int(),
+  "orderNumber": zod.string(),
+  "sellerName": zod.string(),
+  "buyerName": zod.string(),
+  "reason": zod.string(),
+  "details": zod.string(),
+  "status": zod.enum(['open', 'reviewing', 'resolved', 'rejected']),
+  "resolutionNote": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
  * @summary Update the fulfilment state of a seller order
  */
 export const UpdateSellerOrderStatusParams = zod.object({
@@ -573,12 +674,21 @@ export const ListQuotationsResponseItem = zod.object({
   "notes": zod.string(),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
   "productId": zod.number().int(),
   "name": zod.string(),
   "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
   "unitPrice": zod.number(),
   "quantity": zod.number().int(),
   "sellerName": zod.string()
+})),
+  "responses": zod.array(zod.object({
+  "id": zod.number().int(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['quoted', 'accepted', 'declined']),
+  "totalNgn": zod.number().int().nullable(),
+  "message": zod.string(),
+  "createdAt": zod.coerce.date()
 }))
 })
 export const ListQuotationsResponse = zod.array(ListQuotationsResponseItem)
@@ -609,12 +719,117 @@ export const CreateQuotationResponse = zod.object({
   "notes": zod.string(),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
   "productId": zod.number().int(),
   "name": zod.string(),
   "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
   "unitPrice": zod.number(),
   "quantity": zod.number().int(),
   "sellerName": zod.string()
+})),
+  "responses": zod.array(zod.object({
+  "id": zod.number().int(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['quoted', 'accepted', 'declined']),
+  "totalNgn": zod.number().int().nullable(),
+  "message": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary List bulk quote requests containing this seller's products
+ */
+export const ListSellerQuotationsResponseItem = zod.object({
+  "id": zod.number().int(),
+  "businessName": zod.string(),
+  "status": zod.enum(['requested', 'quoted', 'accepted', 'declined']),
+  "notes": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "productId": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
+  "unitPrice": zod.number(),
+  "quantity": zod.number().int(),
+  "sellerName": zod.string()
+})),
+  "responses": zod.array(zod.object({
+  "id": zod.number().int(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['quoted', 'accepted', 'declined']),
+  "totalNgn": zod.number().int().nullable(),
+  "message": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+export const ListSellerQuotationsResponse = zod.array(ListSellerQuotationsResponseItem)
+
+
+/**
+ * @summary Submit or update this seller's quote for a bulk request
+ */
+export const RespondToQuotationParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+
+export const respondToQuotationBodyMessageMax = 1000;
+
+
+
+export const RespondToQuotationBody = zod.object({
+  "status": zod.enum(['quoted', 'declined']),
+  "totalNgn": zod.number().int().min(1).optional(),
+  "message": zod.string().max(respondToQuotationBodyMessageMax)
+})
+
+export const RespondToQuotationResponse = zod.object({
+  "id": zod.number().int(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['quoted', 'accepted', 'declined']),
+  "totalNgn": zod.number().int().nullable(),
+  "message": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Accept or decline a seller's quote response
+ */
+export const UpdateQuotationResponseParams = zod.object({
+  "id": zod.coerce.number().int(),
+  "responseId": zod.coerce.number().int()
+})
+
+export const UpdateQuotationResponseBody = zod.object({
+  "status": zod.enum(['accepted', 'declined'])
+})
+
+export const UpdateQuotationResponseResponse = zod.object({
+  "id": zod.number().int(),
+  "businessName": zod.string(),
+  "status": zod.enum(['requested', 'quoted', 'accepted', 'declined']),
+  "notes": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "quotationItemId": zod.number().int(),
+  "productId": zod.number().int(),
+  "name": zod.string(),
+  "unit": zod.enum(['kg', 'bag', 'crate', 'litre', 'tonne', 'piece']),
+  "unitPrice": zod.number(),
+  "quantity": zod.number().int(),
+  "sellerName": zod.string()
+})),
+  "responses": zod.array(zod.object({
+  "id": zod.number().int(),
+  "sellerName": zod.string(),
+  "status": zod.enum(['quoted', 'accepted', 'declined']),
+  "totalNgn": zod.number().int().nullable(),
+  "message": zod.string(),
+  "createdAt": zod.coerce.date()
 }))
 })
 

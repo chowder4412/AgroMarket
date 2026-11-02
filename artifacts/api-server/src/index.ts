@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { expireStalePaystackPayments } from "./lib/paystack";
 
 const rawPort = process.env["PORT"];
 
@@ -23,3 +24,10 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
 });
+
+const paymentExpiryTimer = setInterval(() => {
+  void expireStalePaystackPayments().catch((error: unknown) => {
+    logger.error({ err: error }, "Could not reconcile expired Paystack payments");
+  });
+}, 60_000);
+paymentExpiryTimer.unref();
