@@ -1,16 +1,15 @@
 import { Router, type IRouter } from "express";
 import {
-  and,
   count,
   desc,
   eq,
+  and,
   inArray,
   sql,
 } from "drizzle-orm";
 import {
   db,
   inventoryTable,
-  orderStatusEnum,
   ordersTable,
   productsTable,
   sellerProfilesTable,
@@ -23,18 +22,10 @@ import {
 } from "@workspace/api-zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { orderPayload } from "./commerce";
+import { canSellerTransitionOrder } from "../lib/order-state";
 
 const router: IRouter = Router();
 const activeOrderStatuses = ["paid", "processing", "in_transit"] as const;
-type OrderStatus = (typeof orderStatusEnum.enumValues)[number];
-const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
-  pending_payment: ["paid", "cancelled"],
-  paid: ["processing", "cancelled"],
-  processing: ["in_transit", "cancelled"],
-  in_transit: ["delivered"],
-  delivered: [],
-  cancelled: [],
-};
 
 router.get(
   "/seller/dashboard",
@@ -140,16 +131,26 @@ router.patch(
       res.status(404).json({ error: "Order not found for this seller." });
       return;
     }
-    if (!allowedTransitions[order.status].includes(parsed.data.status)) {
+    if (!canSellerTransitionOrder(order.status, parsed.data.status)) {
       res.status(409).json({
         error: `Cannot move an order from ${order.status} to ${parsed.data.status}.`,
       });
       return;
     }
-    await db
+    const [updated] = await db
       .update(ordersTable)
       .set({ status: parsed.data.status })
-      .where(eq(ordersTable.id, order.id));
+      .where(
+        and(
+          eq(ordersTable.id, order.id),
+          eq(ordersTable.status, order.status),
+        ),
+      )
+      .returning({ id: ordersTable.id });
+    if (!updated) {
+      res.status(409).json({ error: "Order changed. Refresh and try again." });
+      return;
+    }
     const payload = await orderPayload(order.id);
     if (!payload) {
       res.status(404).json({ error: "Order not found." });

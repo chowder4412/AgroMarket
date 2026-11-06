@@ -14,6 +14,7 @@ const {
 );
 const { canTransitionDispute } = await import("./dispute-state.ts");
 const { calculateQuotationPrice } = await import("./quotation-pricing.ts");
+const { canSellerTransitionOrder } = await import("./order-state.ts");
 
 const rawBody = Buffer.from('{"event":"charge.success","data":{"id":42}}');
 const signature = createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
@@ -76,6 +77,15 @@ test("enforces the dispute review state machine", () => {
   assert.equal(canTransitionDispute("reviewing", "rejected"), true);
   assert.equal(canTransitionDispute("resolved", "reviewing"), false);
   assert.equal(canTransitionDispute("rejected", "resolved"), false);
+});
+
+test("sellers can only advance fulfillment after payment", () => {
+  assert.equal(canSellerTransitionOrder("pending_payment", "paid"), false);
+  assert.equal(canSellerTransitionOrder("paid", "processing"), true);
+  assert.equal(canSellerTransitionOrder("processing", "in_transit"), true);
+  assert.equal(canSellerTransitionOrder("in_transit", "delivered"), true);
+  assert.equal(canSellerTransitionOrder("paid", "cancelled"), false);
+  assert.equal(canSellerTransitionOrder("processing", "cancelled"), false);
 });
 
 test("computes a quote total from complete per-line prices", () => {

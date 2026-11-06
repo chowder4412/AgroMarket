@@ -5,8 +5,8 @@ packages:
   - scripts
 
 allowBuilds:
-  '@clerk/shared': set this to true or false
-  esbuild: set this to true or false
+  '@clerk/shared': false
+  esbuild: true
 
 autoInstallPeers: false
 
@@ -15,9 +15,6 @@ catalog:
   '@clerk/react': ^6.18.1
   '@clerk/shared': ^4.41.1
   '@clerk/themes': ^2.4.57
-  '@replit/vite-plugin-cartographer': ^0.5.21
-  '@replit/vite-plugin-dev-banner': ^0.1.1
-  '@replit/vite-plugin-runtime-error-modal': ^0.0.6
   '@tailwindcss/vite': ^4.1.14
   '@tanstack/react-query': ^5.90.21
   '@types/node': ^25.3.3
@@ -41,8 +38,6 @@ catalog:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
-  - '@replit/*'
-  - stripe-replit-sync
 
 onlyBuiltDependencies:
   - '@swc/core'

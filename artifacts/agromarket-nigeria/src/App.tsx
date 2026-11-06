@@ -148,7 +148,7 @@ function Header() {
     <div className="shell flex h-[72px] items-center justify-between gap-4">
       <Link href="/" className="flex shrink-0 items-center gap-2.5 text-foreground" data-testid="link-home">
         <span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sprout size={22} strokeWidth={2.2} /></span>
-        <span className="leading-tight"><span className="block text-[17px] font-bold tracking-tight">AgroMarket</span><span className="block text-[10px] font-semibold uppercase tracking-[.21em] text-muted-foreground">Nigeria</span></span>
+        <span className="leading-tight"><span className="block text-[17px] font-bold tracking-tight">Agrikulture</span><span className="block text-[10px] font-semibold uppercase tracking-[.21em] text-muted-foreground">Nigeria</span></span>
       </Link>
       <nav className={`${menuOpen ? 'absolute left-0 right-0 top-[72px] flex flex-col border-b border-border bg-background p-4 shadow-lg' : 'hidden'} items-center gap-1 md:static md:flex md:flex-row md:border-0 md:bg-transparent md:p-0 md:shadow-none`}>
         <Link onClick={() => setMenuOpen(false)} href="/" className="rounded-full px-4 py-2 text-sm font-semibold hover:bg-secondary/70" data-testid="link-discover">Discover</Link>
@@ -671,7 +671,7 @@ function AccountRolePage() {
     });
   };
   const currentRoles = account.data?.roles?.filter((value) => value !== 'consumer') || [];
-  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Set up your market account" title="How do you use AgroMarket?" description="Choose the account type that best fits. You can shop locally as a consumer without selecting a seller or business role." />
+  return <main className="shell page-enter py-9 md:py-12"><PageTitle eyebrow="Set up your market account" title="How do you use Agrikulture?" description="Choose the account type that best fits. You can shop locally as a consumer without selecting a seller or business role." />
     <div className="grid gap-8 lg:grid-cols-[1.05fr_.8fr]">
       <form onSubmit={submit} className="space-y-5 rounded-[24px] border border-border bg-card p-5 md:p-7">
         {account.isLoading ? <Skeleton className="h-12" /> : account.isError ? <Notice>Sign in to set up your account type. <Link href="/sign-in" className="font-bold underline" data-testid="link-role-sign-in">Sign in</Link></Notice> : <>
@@ -734,7 +734,7 @@ function SignInPage() {
   return <main className="grain flex min-h-[calc(100dvh-72px)] items-center justify-center bg-[#eae7d9] px-4 py-10"><div className="w-full max-w-[470px]"><p className="mb-6 text-center text-xs font-bold uppercase tracking-[.18em] text-primary">Your local market, in one place</p><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></main>;
 }
 function SignUpPage() {
-  return <main className="grain flex min-h-[calc(100dvh-72px)] items-center justify-center bg-[#eae7d9] px-4 py-10"><div className="w-full max-w-[470px]"><p className="mb-6 text-center text-xs font-bold uppercase tracking-[.18em] text-primary">Join the AgroMarket community</p><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></main>;
+  return <main className="grain flex min-h-[calc(100dvh-72px)] items-center justify-center bg-[#eae7d9] px-4 py-10"><div className="w-full max-w-[470px]"><p className="mb-6 text-center text-xs font-bold uppercase tracking-[.18em] text-primary">Join the Agrikulture community</p><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></main>;
 }
 function HomeRedirect() {
   return <><Show when="signed-in"><Redirect to="/orders" /></Show><Show when="signed-out"><Storefront /></Show></>;
@@ -835,7 +835,7 @@ function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
   return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={appearance}
     signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}
-    localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to your AgroMarket account' } }, signUp: { start: { title: 'Join AgroMarket', subtitle: 'Buy local. Grow together.' } } }}
+    localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to your Agrikulture account' } }, signUp: { start: { title: 'Join Agrikulture', subtitle: 'Buy local. Grow together.' } } }}
     routerPush={(to: string) => setLocation(stripBase(to))} routerReplace={(to: string) => setLocation(stripBase(to), { replace: true })}>
     <QueryClientProvider client={queryClient}><ClerkQueryClientCacheInvalidator /><AppRoutes /></QueryClientProvider>
   </ClerkProvider>;

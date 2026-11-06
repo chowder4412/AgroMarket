@@ -9,6 +9,7 @@ import {
   paymentsTable,
   quotationResponsesTable,
   quotationsTable,
+  pool,
 } from "@workspace/db";
 import {
   isPaystackConfigured,
@@ -30,6 +31,7 @@ export type { PaystackTransaction } from "./paystack-security";
 
 const PAYSTACK_API = "https://api.paystack.co";
 const RESERVATION_MINUTES = 15;
+const PAYMENT_EXPIRY_LOCK_ID = "5488720319701";
 
 function paystackSecret(): string | null {
   const secret = process.env.PAYSTACK_SECRET_KEY?.trim();
@@ -284,8 +286,7 @@ export async function markPaystackPaymentFailed(
   return updatePaymentGroup(reference, transactionId, "failed");
 }
 
-export async function expireStalePaystackPayments(): Promise<void> {
-  if (!paystackSecret()) return;
+async function expireStalePaystackPaymentsBatch(): Promise<void> {
   const expired = await db
     .select({
       reference: checkoutPaymentsTable.providerReference,
@@ -339,6 +340,33 @@ export async function expireStalePaystackPayments(): Promise<void> {
             eq(checkoutPaymentsTable.status, "pending"),
           ),
         );
+    }
+  }
+}
+
+export async function expireStalePaystackPayments(): Promise<void> {
+  if (!paystackSecret()) return;
+
+  const lockClient = await pool.connect();
+  let lockAcquired = false;
+  try {
+    const result = await lockClient.query<{ locked: boolean }>(
+      "select pg_try_advisory_lock($1::bigint) as locked",
+      [PAYMENT_EXPIRY_LOCK_ID],
+    );
+    lockAcquired = result.rows[0]?.locked === true;
+    if (!lockAcquired) return;
+    await expireStalePaystackPaymentsBatch();
+  } finally {
+    try {
+      if (lockAcquired) {
+        await lockClient.query(
+          "select pg_advisory_unlock($1::bigint)",
+          [PAYMENT_EXPIRY_LOCK_ID],
+        );
+      }
+    } finally {
+      lockClient.release();
     }
   }
 }

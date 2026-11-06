@@ -27,7 +27,7 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
     const displayName =
       (typeof claims?.name === "string" && claims.name) ||
       (typeof claims?.first_name === "string" && claims.first_name) ||
-      "AgroMarket member";
+      "Agrikulture member";
     const email = typeof claims?.email === "string" ? claims.email : "";
 
     const [inserted] = await db
