@@ -33,9 +33,9 @@ The root development command loads `.env` before starting both services. Do not 
 
 ## Production Configuration
 
-Deploy the frontend static build and the API Node.js service, routing `/api` to the API. Configure `DATABASE_URL`, `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `PAYSTACK_SECRET_KEY`, `PAYSTACK_PUBLIC_KEY`, and `CORS_ORIGINS` in the hosting provider's secret manager. Set `CORS_ORIGINS` to the exact frontend origin when frontend and API are on separate origins.
+Vercel builds the frontend as static assets and routes `/api/*` to the Express handler in `api/[...path].ts`. Add `DATABASE_URL`, `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`, `PAYSTACK_SECRET_KEY`, `PAYSTACK_PUBLIC_KEY`, and `CORS_ORIGINS` to the Vercel project environment; local `.env` values are not automatically uploaded. Set `VITE_CLERK_PUBLISHABLE_KEY` for the Production and Preview build environments. Set `CORS_ORIGINS` to the exact deployed origin if the API is ever hosted separately.
 
-For checkout, configure the matching Paystack public and secret keys, then register `/api/payments/paystack/webhook` in the Paystack dashboard. Use test credentials until checkout and webhook verification have been tested end to end.
+For checkout, configure the matching Paystack public and secret keys, then register `/api/payments/paystack/webhook` in the Paystack dashboard. Use test credentials until checkout and webhook verification have been tested end to end. Vercel functions do not run the API's persistent expiry timer; configure a scheduled worker before relying on automatic release of abandoned checkout reservations.
 
 ## Project Structure
 
